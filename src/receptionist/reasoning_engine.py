@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .models import BusinessConfig
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class ReasoningEngine:
         }
     ]
 
-    SYSTEM_PROMPT = """You are Donna, an AI receptionist assistant. Your name is Donna. Your job is to:
+    BASE_SYSTEM_PROMPT = """You are Donna, an AI receptionist assistant. Your name is Donna. Your job is to:
 1. Identify who is calling and why
 2. Search for relevant context about the caller
 3. Provide helpful, professional responses
@@ -89,11 +90,12 @@ When a caller introduces themselves or states their purpose:
 
 Always introduce yourself as Donna when appropriate. Be professional, warm, concise, and helpful."""
 
-    def __init__(self, settings: Settings | None = None):
+    def __init__(self, settings: Settings | None = None, business_config: BusinessConfig | None = None):
         """Initialize the ReasoningEngine with Fireworks AI client.
         
         Args:
             settings: Application settings. If None, loads from environment.
+            business_config: Business configuration with CEO/company info.
         """
         if settings is None:
             from .config import get_settings
@@ -102,6 +104,25 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
         self._settings = settings
         self._api_key = settings.fireworks_api_key
         self._client = httpx.AsyncClient(timeout=30.0)
+        self._business_config = business_config
+
+    def set_business_config(self, config: BusinessConfig) -> None:
+        """Update the business configuration."""
+        self._business_config = config
+
+    def _build_system_prompt(self) -> str:
+        """Build system prompt with business config injected."""
+        prompt = self.BASE_SYSTEM_PROMPT
+        
+        if self._business_config:
+            business_info = f"\n\nYou work for {self._business_config.ceo_name}."
+            if self._business_config.company_name:
+                business_info += f" The company is {self._business_config.company_name}."
+            if self._business_config.company_description:
+                business_info += f" {self._business_config.company_description}"
+            prompt += business_info
+        
+        return prompt
 
     async def decide_action(
         self, transcript: str, context: dict[str, Any]
@@ -116,7 +137,7 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
             List of tool calls to execute.
         """
         messages = [
-            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "system", "content": self._build_system_prompt()},
         ]
         
         # Add conversation history if available
@@ -188,7 +209,7 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
         Returns:
             Generated response text.
         """
-        system_content = self.SYSTEM_PROMPT
+        system_content = self._build_system_prompt()
         
         # Add context from searches
         if context.get("contacts"):

@@ -130,3 +130,49 @@ class Contact:
             phone=data.get("phone"),
             company=data.get("company"),
         )
+
+
+@dataclass
+class BusinessConfig:
+    """Business configuration for the AI receptionist.
+    
+    Attributes:
+        ceo_name: Name of the CEO/boss
+        company_name: Name of the company (optional)
+        company_description: Brief company description (optional)
+    """
+
+    ceo_name: str
+    company_name: str | None = None
+    company_description: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate required fields after initialization."""
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate all required fields."""
+        if not self.ceo_name or not self.ceo_name.strip():
+            raise ValidationError("CEO name is required and cannot be empty")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for MongoDB storage."""
+        result: dict[str, Any] = {
+            "_id": "business_config",  # Singleton document
+            "ceo_name": self.ceo_name,
+        }
+        if self.company_name is not None:
+            result["company_name"] = self.company_name
+        if self.company_description is not None:
+            result["company_description"] = self.company_description
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "BusinessConfig":
+        """Create BusinessConfig from MongoDB document."""
+        return cls(
+            ceo_name=data.get("ceo_name", ""),
+            company_name=data.get("company_name"),
+            company_description=data.get("company_description"),
+        )
+
