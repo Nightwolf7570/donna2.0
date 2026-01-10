@@ -2,6 +2,7 @@
 
 from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
+from bson import ObjectId # Import ObjectId
 
 from .models import Contact, Email
 from .vector_search import VectorSearch
@@ -38,10 +39,11 @@ class DataIngestion:
         
         # Convert to dict for MongoDB
         doc = email.to_dict()
+        doc.pop("_id", None) # Remove _id to prevent type issues on update
         
         # Upsert: update if exists, insert if not
         self._vector_search.emails_collection.update_one(
-            {"_id": email.id},
+            {"_id": ObjectId(email.id)}, # Convert string ID to ObjectId
             {"$set": doc},
             upsert=True,
         )
@@ -55,10 +57,11 @@ class DataIngestion:
             contact: Contact object to ingest
         """
         doc = contact.to_dict()
+        doc.pop("_id", None) # Remove _id to prevent type issues on update
         
         # Upsert: update if exists, insert if not
         self._vector_search.contacts_collection.update_one(
-            {"_id": contact.id},
+            {"_id": ObjectId(contact.id)}, # Convert string ID to ObjectId
             {"$set": doc},
             upsert=True,
         )
@@ -88,11 +91,12 @@ class DataIngestion:
                     email.embedding = await self._vector_search.embed_text(text_to_embed)
                 
                 doc = email.to_dict()
+                doc.pop("_id", None) # Remove _id to prevent type issues on update
                 
                 # Create upsert operation
                 operations.append(
                     UpdateOne(
-                        {"_id": email.id},
+                        {"_id": ObjectId(email.id)}, # Convert string ID to ObjectId
                         {"$set": doc},
                         upsert=True,
                     )
@@ -137,9 +141,10 @@ class DataIngestion:
         
         for contact in contacts:
             doc = contact.to_dict()
+            doc.pop("_id", None) # Remove _id to prevent type issues on update
             operations.append(
                 UpdateOne(
-                    {"_id": contact.id},
+                    {"_id": ObjectId(contact.id)}, # Convert string ID to ObjectId
                     {"$set": doc},
                     upsert=True,
                 )
