@@ -104,7 +104,9 @@ ruff check . && ruff format .   # Lint + format
 - Business identity config: CEO name, company info stored in MongoDB
 - REST API for identity management (`/config/identity`)
 - Dynamic system prompt injection in reasoning engine
+
 - ElevenLabs TTS integration fixed
+- Google Calendar integration (OAuth2, Sync, Scheduling)
 
 ## Rules
 

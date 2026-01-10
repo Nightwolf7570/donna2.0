@@ -32,3 +32,12 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Google OAuth
+credentials.json
+token.json
+# Node
+node_modules/
+
+# Logs
+*.log
