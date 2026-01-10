@@ -70,7 +70,7 @@ class VoicePipeline:
         connection_closed = asyncio.Event()
         
         try:
-            async for socket_client in self._client.listen.v1.connect(
+            async with self._client.listen.v1.connect(
                 model=self._stt_model,
                 language=self._stt_language,
                 encoding=self._stt_encoding,
@@ -79,7 +79,7 @@ class VoicePipeline:
                 interim_results="true",
                 utterance_end_ms="1000",
                 vad_events="true",
-            ):
+            ) as socket_client:
                 async def process_results() -> None:
                     try:
                         async for result in socket_client:
@@ -121,7 +121,8 @@ class VoicePipeline:
                         continue
                 
                 await process_task
-                break
+                
+
                 
         except Exception as e:
             logger.error(f"Transcription stream error: {e}")

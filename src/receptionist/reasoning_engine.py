@@ -29,6 +29,25 @@ class ToolCall:
     arguments: dict[str, Any]
 
 
+@dataclass
+class CallOutcome:
+    """Structured outcome of a call analysis."""
+    summary: str
+    decision: str  # handled, scheduled, escalated, rejected
+    decision_label: str
+    reasoning: str
+    action_taken: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary,
+            "decision": self.decision,
+            "decision_label": self.decision_label,
+            "reasoning": self.reasoning,
+            "action_taken": self.action_taken,
+        }
+
+
 class ReasoningEngine:
     """Uses Fireworks AI for tool calling decisions and response generation.
     
@@ -361,30 +380,6 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
         
         return context
 
-    async def close(self) -> None:
-        """Close the HTTP client."""
-        await self._client.aclose()
-
-
-@dataclass
-class CallOutcome:
-    """Structured outcome of a call analysis."""
-    summary: str
-    decision: str  # handled, scheduled, escalated, rejected
-    decision_label: str
-    reasoning: str
-    action_taken: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "summary": self.summary,
-            "decision": self.decision,
-            "decision_label": self.decision_label,
-            "reasoning": self.reasoning,
-            "action_taken": self.action_taken,
-        }
-    
-    
     async def analyze_call_outcome(self, transcript_history: list[str]) -> CallOutcome:
         """Analyze a full call transcript to determine the outcome.
         
@@ -463,4 +458,11 @@ Decision Guidelines:
                 reasoning=f"Error during analysis: {str(e)}",
                 action_taken="Logged for review"
             )
+
+    async def close(self) -> None:
+        """Close the HTTP client."""
+        await self._client.aclose()
+
+
+
 
