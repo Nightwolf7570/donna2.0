@@ -15,11 +15,12 @@ export default function Settings() {
   const [error, setError] = useState<string | null>(null)
 
   const [apiKeys, setApiKeys] = useState({
-    deepgram: '••••••••••••••••',
-    fireworks: '••••••••••••••••',
-    voyage: '••••••••••••••••',
-    twilio_sid: '••••••••••••••••',
-    twilio_token: '••••••••••••••••',
+    deepgram: '',
+    fireworks: '',
+    voyage: '',
+    twilio_sid: '',
+    twilio_token: '',
+    mongodb: '',
     elevenlabs: '',
   })
 
@@ -32,27 +33,38 @@ export default function Settings() {
     language: 'en-US',
   })
 
-  const [voiceSettings, setVoiceSettings] = useState({
-    ttsProvider: 'twilio',
-    voice: 'Polly.Joanna',
-    speed: 1.0,
-    pitch: 1.0,
-  })
+
 
   // Fetch business config on mount
+  // Fetch configs on mount
   useEffect(() => {
     const fetchConfig = async () => {
       try {
         const client = getApiClient()
-        const config = await client.getBusinessConfig()
+
+        // Fetch Business Config
+        const bizConfig = await client.getBusinessConfig()
         setGeneralSettings(prev => ({
           ...prev,
-          ceoName: config.ceoName || '',
-          companyName: config.companyName || '',
-          companyDescription: config.companyDescription || '',
+          ceoName: bizConfig.ceoName || '',
+          companyName: bizConfig.companyName || '',
+          companyDescription: bizConfig.companyDescription || '',
         }))
+
+        // Fetch System Config
+        const sysConfig = await client.getConfig()
+        setApiKeys({
+          deepgram: sysConfig.deepgramApiKey || '',
+          fireworks: sysConfig.fireworksApiKey || '',
+          voyage: sysConfig.voyageApiKey || '',
+          twilio_sid: sysConfig.twilioAccountSid || '',
+          twilio_token: sysConfig.twilioAuthToken || '',
+          mongodb: sysConfig.mongodbUri || '',
+          elevenlabs: '', // Not in SystemConfig type yet, keep as is
+        })
+
       } catch (e) {
-        console.warn('Failed to fetch business config:', e)
+        console.warn('Failed to fetch config:', e)
       }
     }
     fetchConfig()
@@ -80,16 +92,6 @@ export default function Settings() {
         </svg>
       ),
     },
-    {
-      id: 'voice',
-      title: 'Voice & Speech',
-      description: 'TTS and voice configuration',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-        </svg>
-      ),
-    },
   ]
 
   const handleSave = async () => {
@@ -97,11 +99,24 @@ export default function Settings() {
     setError(null)
     try {
       const client = getApiClient()
+
+      // Update Business Config
       await client.updateBusinessConfig({
         ceoName: generalSettings.ceoName,
         companyName: generalSettings.companyName || undefined,
         companyDescription: generalSettings.companyDescription || undefined,
       })
+
+      // Update System Config
+      await client.updateConfig({
+        deepgramApiKey: apiKeys.deepgram,
+        fireworksApiKey: apiKeys.fireworks,
+        voyageApiKey: apiKeys.voyage,
+        twilioAccountSid: apiKeys.twilio_sid,
+        twilioAuthToken: apiKeys.twilio_token,
+        mongodbUri: apiKeys.mongodb,
+      })
+
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
@@ -177,11 +192,7 @@ export default function Settings() {
                 <p className="text-sm text-[#a0a0b0] mb-6">
                   Configure your API keys for external services. Keys are stored securely and never exposed.
                 </p>
-                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 mb-6">
-                  <p className="text-sm text-amber-400">
-                    ⚠️ API keys are managed via environment variables (.env file) and cannot be changed here.
-                  </p>
-                </div>
+
               </div>
 
               <ApiKeyInput
@@ -201,6 +212,12 @@ export default function Settings() {
                 description="For semantic embeddings"
                 value={apiKeys.voyage}
                 onChange={(v) => setApiKeys({ ...apiKeys, voyage: v })}
+              />
+              <ApiKeyInput
+                label="MongoDB URI"
+                description="Database connection string"
+                value={apiKeys.mongodb}
+                onChange={(v) => setApiKeys({ ...apiKeys, mongodb: v })}
               />
               <div className="border-t border-[#2a2a3a] pt-6">
                 <h3 className="text-sm font-medium text-white mb-4">Twilio Credentials</h3>
@@ -321,108 +338,7 @@ export default function Settings() {
             </div>
           )}
 
-          {activeSection === 'voice' && (
-            <div className="card p-6 space-y-6">
-              <div>
-                <h2 className="text-lg font-semibold text-white mb-4">Voice & Speech Settings</h2>
-                <p className="text-sm text-[#a0a0b0] mb-6">
-                  Configure text-to-speech provider and voice characteristics.
-                </p>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium text-[#a0a0b0] mb-2">TTS Provider</label>
-                <div className="grid grid-cols-3 gap-3">
-                  {[
-                    { id: 'twilio', name: 'Twilio (Polly)', desc: 'Low latency' },
-                    { id: 'deepgram', name: 'Deepgram', desc: 'Fast & natural' },
-                    { id: 'elevenlabs', name: 'ElevenLabs', desc: 'Premium quality' },
-                  ].map((provider) => (
-                    <button
-                      key={provider.id}
-                      onClick={() => setVoiceSettings({ ...voiceSettings, ttsProvider: provider.id })}
-                      className={`p-4 rounded-xl border transition-all ${voiceSettings.ttsProvider === provider.id
-                        ? 'border-[#6366f1] bg-[#6366f1]/10'
-                        : 'border-[#2a2a3a] hover:border-[#3a3a4a]'
-                        }`}
-                    >
-                      <p className="font-medium text-white">{provider.name}</p>
-                      <p className="text-xs text-[#a0a0b0] mt-1">{provider.desc}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-[#a0a0b0] mb-2">Voice</label>
-                <select
-                  value={voiceSettings.voice}
-                  onChange={(e) => setVoiceSettings({ ...voiceSettings, voice: e.target.value })}
-                  className="input"
-                >
-                  <optgroup label="Twilio Polly">
-                    <option value="Polly.Joanna">Joanna (Female, US)</option>
-                    <option value="Polly.Matthew">Matthew (Male, US)</option>
-                    <option value="Polly.Amy">Amy (Female, UK)</option>
-                  </optgroup>
-                  <optgroup label="Deepgram">
-                    <option value="aura-asteria-en">Asteria (Female)</option>
-                    <option value="aura-luna-en">Luna (Female)</option>
-                    <option value="aura-orion-en">Orion (Male)</option>
-                  </optgroup>
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-[#a0a0b0] mb-2">
-                    Speed: {voiceSettings.speed.toFixed(1)}x
-                  </label>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="2"
-                    step="0.1"
-                    value={voiceSettings.speed}
-                    onChange={(e) => setVoiceSettings({ ...voiceSettings, speed: parseFloat(e.target.value) })}
-                    className="w-full accent-[#6366f1]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-[#a0a0b0] mb-2">
-                    Pitch: {voiceSettings.pitch.toFixed(1)}
-                  </label>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="2"
-                    step="0.1"
-                    value={voiceSettings.pitch}
-                    onChange={(e) => setVoiceSettings({ ...voiceSettings, pitch: parseFloat(e.target.value) })}
-                    className="w-full accent-[#6366f1]"
-                  />
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl bg-[#1a1a24] border border-[#2a2a3a]">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#6366f1] to-[#8b5cf6] flex items-center justify-center">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm text-white">Test Voice</p>
-                    <p className="text-xs text-[#a0a0b0]">Click to hear a sample with current settings</p>
-                  </div>
-                  <button className="btn-secondary text-sm">
-                    Play Sample
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

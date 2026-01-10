@@ -4,6 +4,7 @@ import TopNav from './components/TopNav'
 import Dashboard from './views/Dashboard'
 import Emails from './views/Emails'
 import LiveCallView from './components/LiveCallView'
+import Settings from './views/Settings'
 
 export type StatusMode = 'on-duty' | 'quiet-hours' | 'do-not-disturb'
 
@@ -19,6 +20,8 @@ function App() {
         return <Emails />
       case 'calls':
         return <LiveCallView selectedCallId={null} onCallSelect={() => { }} />
+      case 'settings':
+        return <Settings />
       default:
         return <Dashboard />
     }
