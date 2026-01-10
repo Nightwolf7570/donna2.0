@@ -205,6 +205,30 @@ export class ApiClient {
   }> {
     return this.request('/stats')
   }
+
+  // Business config endpoints
+  async getBusinessConfig(): Promise<{
+    ceoName: string
+    companyName: string | null
+    companyDescription: string | null
+  }> {
+    return this.request('/config/business')
+  }
+
+  async updateBusinessConfig(config: {
+    ceoName: string
+    companyName?: string
+    companyDescription?: string
+  }): Promise<{
+    ceoName: string
+    companyName: string | null
+    companyDescription: string | null
+  }> {
+    return this.request('/config/business', {
+      method: 'PUT',
+      body: config,
+    })
+  }
 }
 
 // Default client instance

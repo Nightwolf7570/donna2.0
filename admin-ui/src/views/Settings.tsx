@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { getApiClient } from '../api/client'
 
 interface SettingsSection {
   id: string
@@ -10,7 +11,9 @@ interface SettingsSection {
 export default function Settings() {
   const [activeSection, setActiveSection] = useState('api-keys')
   const [saved, setSaved] = useState(false)
-  
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
   const [apiKeys, setApiKeys] = useState({
     deepgram: '••••••••••••••••',
     fireworks: '••••••••••••••••',
@@ -21,8 +24,10 @@ export default function Settings() {
   })
 
   const [generalSettings, setGeneralSettings] = useState({
-    assistantName: 'Donna',
+    ceoName: '',
     companyName: '',
+    companyDescription: '',
+    assistantName: 'Donna',
     timezone: 'America/Los_Angeles',
     language: 'en-US',
   })
@@ -33,6 +38,25 @@ export default function Settings() {
     speed: 1.0,
     pitch: 1.0,
   })
+
+  // Fetch business config on mount
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const client = getApiClient()
+        const config = await client.getBusinessConfig()
+        setGeneralSettings(prev => ({
+          ...prev,
+          ceoName: config.ceoName || '',
+          companyName: config.companyName || '',
+          companyDescription: config.companyDescription || '',
+        }))
+      } catch (e) {
+        console.warn('Failed to fetch business config:', e)
+      }
+    }
+    fetchConfig()
+  }, [])
 
   const sections: SettingsSection[] = [
     {
@@ -68,9 +92,24 @@ export default function Settings() {
     },
   ]
 
-  const handleSave = () => {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      const client = getApiClient()
+      await client.updateBusinessConfig({
+        ceoName: generalSettings.ceoName,
+        companyName: generalSettings.companyName || undefined,
+        companyDescription: generalSettings.companyDescription || undefined,
+      })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      console.error('Failed to save settings:', e)
+      setError('Failed to save settings')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -81,7 +120,7 @@ export default function Settings() {
           <h1 className="text-3xl font-bold text-white">Settings</h1>
           <p className="text-[#a0a0b0] mt-1">Configure Donna's behavior and integrations.</p>
         </div>
-        <button onClick={handleSave} className="btn-primary flex items-center gap-2">
+        <button onClick={handleSave} disabled={saving} className="btn-primary flex items-center gap-2 disabled:opacity-50">
           {saved ? (
             <>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -100,6 +139,12 @@ export default function Settings() {
         </button>
       </div>
 
+      {error && (
+        <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400">
+          {error}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Sidebar */}
         <div className="lg:col-span-1">
@@ -108,11 +153,10 @@ export default function Settings() {
               <button
                 key={section.id}
                 onClick={() => setActiveSection(section.id)}
-                className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${
-                  activeSection === section.id
-                    ? 'bg-[#6366f1]/20 text-[#8b5cf6]'
-                    : 'text-[#a0a0b0] hover:bg-[#1a1a24] hover:text-white'
-                }`}
+                className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all ${activeSection === section.id
+                  ? 'bg-[#6366f1]/20 text-[#8b5cf6]'
+                  : 'text-[#a0a0b0] hover:bg-[#1a1a24] hover:text-white'
+                  }`}
               >
                 {section.icon}
                 <div className="text-left">
@@ -133,6 +177,11 @@ export default function Settings() {
                 <p className="text-sm text-[#a0a0b0] mb-6">
                   Configure your API keys for external services. Keys are stored securely and never exposed.
                 </p>
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 mb-6">
+                  <p className="text-sm text-amber-400">
+                    ⚠️ API keys are managed via environment variables (.env file) and cannot be changed here.
+                  </p>
+                </div>
               </div>
 
               <ApiKeyInput
@@ -191,14 +240,15 @@ export default function Settings() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-[#a0a0b0] mb-2">Assistant Name</label>
+                <label className="block text-sm font-medium text-[#a0a0b0] mb-2">CEO Name *</label>
                 <input
                   type="text"
-                  value={generalSettings.assistantName}
-                  onChange={(e) => setGeneralSettings({ ...generalSettings, assistantName: e.target.value })}
+                  value={generalSettings.ceoName}
+                  onChange={(e) => setGeneralSettings({ ...generalSettings, ceoName: e.target.value })}
                   className="input"
+                  placeholder="Enter CEO name"
                 />
-                <p className="text-xs text-[#a0a0b0] mt-1">The name your AI assistant will use to identify itself</p>
+                <p className="text-xs text-[#a0a0b0] mt-1">The CEO's name that Donna will recognize</p>
               </div>
 
               <div>
@@ -211,6 +261,33 @@ export default function Settings() {
                   placeholder="Your Company Name"
                 />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[#a0a0b0] mb-2">Company Description</label>
+                <textarea
+                  value={generalSettings.companyDescription}
+                  onChange={(e) => setGeneralSettings({ ...generalSettings, companyDescription: e.target.value })}
+                  className="input min-h-[80px]"
+                  placeholder="Brief description of what your company does"
+                />
+              </div>
+
+              <div className="border-t border-[#2a2a3a] pt-6">
+                <h3 className="text-sm font-medium text-white mb-4">Assistant Settings</h3>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[#a0a0b0] mb-2">Assistant Name</label>
+                <input
+                  type="text"
+                  value={generalSettings.assistantName}
+                  onChange={(e) => setGeneralSettings({ ...generalSettings, assistantName: e.target.value })}
+                  className="input"
+                />
+                <p className="text-xs text-[#a0a0b0] mt-1">The name your AI assistant will use to identify itself</p>
+              </div>
+
+
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -264,11 +341,10 @@ export default function Settings() {
                     <button
                       key={provider.id}
                       onClick={() => setVoiceSettings({ ...voiceSettings, ttsProvider: provider.id })}
-                      className={`p-4 rounded-xl border transition-all ${
-                        voiceSettings.ttsProvider === provider.id
-                          ? 'border-[#6366f1] bg-[#6366f1]/10'
-                          : 'border-[#2a2a3a] hover:border-[#3a3a4a]'
-                      }`}
+                      className={`p-4 rounded-xl border transition-all ${voiceSettings.ttsProvider === provider.id
+                        ? 'border-[#6366f1] bg-[#6366f1]/10'
+                        : 'border-[#2a2a3a] hover:border-[#3a3a4a]'
+                        }`}
                     >
                       <p className="font-medium text-white">{provider.name}</p>
                       <p className="text-xs text-[#a0a0b0] mt-1">{provider.desc}</p>
@@ -353,13 +429,13 @@ export default function Settings() {
   )
 }
 
-function ApiKeyInput({ 
-  label, 
-  description, 
-  value, 
-  onChange, 
-  placeholder 
-}: { 
+function ApiKeyInput({
+  label,
+  description,
+  value,
+  onChange,
+  placeholder
+}: {
   label: string
   description?: string
   value: string

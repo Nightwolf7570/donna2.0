@@ -66,3 +66,16 @@ export interface PaginatedResponse<T> {
   page: number
   pageSize: number
 }
+
+// Business Config Types
+export interface BusinessConfig {
+  ceoName: string
+  companyName: string | null
+  companyDescription: string | null
+}
+
+export interface BusinessConfigInput {
+  ceoName: string
+  companyName?: string
+  companyDescription?: string
+}

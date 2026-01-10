@@ -29,16 +29,17 @@ export default function Dashboard() {
   const [isLive, setIsLive] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [ceoInfo, setCeoInfo] = useState<{ ceoName: string; companyName: string | null } | null>(null)
 
   useEffect(() => {
     const fetchData = async () => {
       const client = getApiClient()
-      
+
       try {
         // Check server health
         const healthy = await client.checkHealth()
         setIsLive(healthy)
-        
+
         if (!healthy) {
           setError('Server is offline')
           setLoading(false)
@@ -52,44 +53,55 @@ export default function Dashboard() {
           emailsIndexed: 0,
           avgResponseTime: 0
         }
-        
+
         try {
           dashboardStats = await client.getDashboardStats()
         } catch (e) {
           console.warn('Failed to fetch stats:', e)
         }
 
+        // Fetch business config (CEO info)
+        try {
+          const businessConfig = await client.getBusinessConfig()
+          setCeoInfo({
+            ceoName: businessConfig.ceoName,
+            companyName: businessConfig.companyName
+          })
+        } catch (e) {
+          console.warn('Failed to fetch business config:', e)
+        }
+
         setStats([
-          { 
-            label: 'Calls Today', 
-            value: dashboardStats.callsToday, 
+          {
+            label: 'Calls Today',
+            value: dashboardStats.callsToday,
             icon: (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
               </svg>
             )
           },
-          { 
-            label: 'Contacts', 
-            value: dashboardStats.totalContacts, 
+          {
+            label: 'Contacts',
+            value: dashboardStats.totalContacts,
             icon: (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             )
           },
-          { 
-            label: 'Emails Indexed', 
-            value: dashboardStats.emailsIndexed, 
+          {
+            label: 'Emails Indexed',
+            value: dashboardStats.emailsIndexed,
             icon: (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
               </svg>
             )
           },
-          { 
-            label: 'Avg Response', 
-            value: `${dashboardStats.avgResponseTime.toFixed(1)}s`, 
+          {
+            label: 'Avg Response',
+            value: `${dashboardStats.avgResponseTime.toFixed(1)}s`,
             icon: (
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -123,7 +135,7 @@ export default function Dashboard() {
     }
 
     fetchData()
-    
+
     // Refresh every 30 seconds
     const interval = setInterval(fetchData, 30000)
     return () => clearInterval(interval)
@@ -133,13 +145,13 @@ export default function Dashboard() {
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / 60000)
-    
+
     if (diffMins < 1) return 'Just now'
     if (diffMins < 60) return `${diffMins} min ago`
-    
+
     const diffHours = Math.floor(diffMins / 60)
     if (diffHours < 24) return `${diffHours} hr${diffHours > 1 ? 's' : ''} ago`
-    
+
     const diffDays = Math.floor(diffHours / 24)
     return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`
   }
@@ -197,6 +209,22 @@ export default function Dashboard() {
       {error && (
         <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400">
           {error}
+        </div>
+      )}
+
+      {/* CEO Profile Card */}
+      {ceoInfo && (
+        <div className="card p-6 mb-8 flex items-center gap-6">
+          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-[#6366f1] to-[#8b5cf6] flex items-center justify-center text-white text-2xl font-bold">
+            {ceoInfo.ceoName.split(' ').map(n => n[0]).join('')}
+          </div>
+          <div>
+            <p className="text-sm text-[#a0a0b0] mb-1">CEO</p>
+            <h2 className="text-xl font-semibold text-white">{ceoInfo.ceoName}</h2>
+            {ceoInfo.companyName && (
+              <p className="text-[#8b5cf6] text-sm mt-1">{ceoInfo.companyName}</p>
+            )}
+          </div>
         </div>
       )}
 
