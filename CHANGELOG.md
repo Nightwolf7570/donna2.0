@@ -10,6 +10,14 @@
 - Dashboard stats endpoint (`GET /stats`) with calls today, contacts, emails count
 - Admin UI: Business config editing in Settings view
 - Admin UI: API client methods for business config
+- Google Calendar OAuth2 integration (`google_auth.py`)
+- Calendar Service for event management (`calendar_service.py`)
+- API endpoints for calendar sync, listing, and creation
+- MongoDB `calendar_events` collection
+- Unit tests for Google Auth and Calendar Service
+- Admin UI: Connected `CalendarAlerts` and `DecisionTimeline` to real API
+- Admin UI: Added calendar methods to `ApiClient`
+
 
 ### Changed
 - Database name changed to `donna_dev`
