@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from .call_manager import CallManager
 from .config import Settings, get_settings
 from .database import DatabaseManager, get_database
-from .models import Contact, Email, ValidationError
+from .models import BusinessConfig, Contact, Email, ValidationError
 from .reasoning_engine import ReasoningEngine
 from .vector_search import VectorSearch
 from .voice_pipeline import VoicePipeline
@@ -104,6 +104,22 @@ class BulkEmailImport(BaseModel):
     emails: list[EmailInput]
 
 
+class BusinessConfigInput(BaseModel):
+    """Input model for updating business configuration."""
+    
+    ceo_name: str = Field(..., min_length=1)
+    company_name: str | None = None
+    company_description: str | None = None
+
+
+class BusinessConfigResponse(BaseModel):
+    """Response model for business configuration."""
+    
+    ceo_name: str
+    company_name: str | None = None
+    company_description: str | None = None
+
+
 # Global instances
 call_manager: CallManager | None = None
 voice_pipeline: VoicePipeline | None = None
@@ -124,18 +140,28 @@ async def lifespan(app: FastAPI):
     
     settings = get_settings()
     
-    # Initialize core components
-    call_manager = CallManager()
-    voice_pipeline = VoicePipeline(settings)
-    reasoning_engine = ReasoningEngine(settings)
-    
-    # Initialize database
+    # Initialize database first (needed to load config)
     try:
         db_manager = get_database()
         logger.info("Database connection initialized")
     except Exception as e:
         logger.warning(f"Database initialization failed: {e}")
         db_manager = None
+    
+    # Load business config from MongoDB (no hardcoded defaults)
+    business_config = None
+    if db_manager:
+        config_doc = db_manager.business_config.find_one({"_id": "business_config"})
+        if config_doc:
+            business_config = BusinessConfig.from_dict(config_doc)
+            logger.info(f"Loaded business config: CEO is {business_config.ceo_name}")
+        else:
+            logger.info("No business config found - configure via PUT /config/business")
+    
+    # Initialize core components
+    call_manager = CallManager()
+    voice_pipeline = VoicePipeline(settings)
+    reasoning_engine = ReasoningEngine(settings, business_config=business_config)
     
     # Initialize vector search
     try:
@@ -618,6 +644,61 @@ async def update_config(config: SystemConfig):
     logger.info(f"Config update requested: {config}")
     
     return config
+
+
+# =============================================================================
+# Admin UI REST API - Business Config
+# =============================================================================
+
+@app.get("/config/business", response_model=BusinessConfigResponse)
+async def get_business_config():
+    """Get business configuration (CEO, company info)."""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    config_doc = db_manager.business_config.find_one({"_id": "business_config"})
+    if not config_doc:
+        raise HTTPException(status_code=404, detail="Business config not found")
+    
+    return BusinessConfigResponse(
+        ceo_name=config_doc.get("ceo_name", ""),
+        company_name=config_doc.get("company_name"),
+        company_description=config_doc.get("company_description"),
+    )
+
+
+@app.put("/config/business", response_model=BusinessConfigResponse)
+async def update_business_config(config_input: BusinessConfigInput):
+    """Update business configuration."""
+    if not db_manager:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    try:
+        config = BusinessConfig(
+            ceo_name=config_input.ceo_name,
+            company_name=config_input.company_name,
+            company_description=config_input.company_description,
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Upsert the config
+    db_manager.business_config.update_one(
+        {"_id": "business_config"},
+        {"$set": config.to_dict()},
+        upsert=True,
+    )
+    
+    # Update the reasoning engine with new config
+    if reasoning_engine:
+        reasoning_engine.set_business_config(config)
+        logger.info(f"Updated business config: CEO is {config.ceo_name}")
+    
+    return BusinessConfigResponse(
+        ceo_name=config.ceo_name,
+        company_name=config.company_name,
+        company_description=config.company_description,
+    )
 
 
 # =============================================================================
