@@ -32,8 +32,3 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
-.kiro
-
-# Claude
-CLAUDE.md
-.claude/
