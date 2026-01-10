@@ -1,23 +1,27 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [Unreleased]
 
 ### Added
-- Claude Code project documentation (CLAUDE.md) with comprehensive architecture overview, development commands, and implementation details
-- Claude Code configuration directory (.claude/) with custom agents, commands, and skills for AI-assisted development
-- Support for tracking Claude Code configuration files in version control
+- Business config model (`BusinessConfig`) with CEO name, company info
+- `business_config` MongoDB collection for storing configuration
+- REST API endpoints: `GET/PUT /config/business`
+- Dynamic system prompt injection in reasoning engine
+- Dashboard stats endpoint (`GET /stats`) with calls today, contacts, emails count
+- Admin UI: Business config editing in Settings view
+- Admin UI: API client methods for business config
 
 ### Changed
-- Updated .gitignore to include Claude Code configuration files (CLAUDE.md and .claude/)
+- Database name changed to `donna_dev`
+- CLAUDE.md streamlined with concise structure
 
-## [Previous Commits]
+### Fixed
+- ElevenLabs TTS integration
 
-### 2026-01-10
-- Added Claude Code integration setup
-- Working build with core functionality
-- Fixed ElevenLabs integration
+### Infrastructure
+- FastAPI backend with Twilio webhooks
+- Deepgram STT/TTS integration
+- Fireworks AI reasoning with tool calling
+- MongoDB Atlas vector search (Voyage AI embeddings)
+- Electron Admin UI (React + Vite)
+
