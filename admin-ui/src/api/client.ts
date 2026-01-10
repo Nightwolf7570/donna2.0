@@ -7,6 +7,24 @@ import type {
   SystemConfig,
 } from '../types'
 
+interface CalendarEvent {
+  id: string
+  summary: string
+  description?: string
+  start: { dateTime: string; timeZone: string } | { date: string }
+  end: { dateTime: string; timeZone: string } | { date: string }
+  status: string
+  htmlLink?: string
+}
+
+interface EventInput {
+  summary: string
+  description?: string
+  start_time: string
+  end_time: string
+  attendees?: string[]
+}
+
 interface ApiClientConfig {
   baseUrl: string
   maxRetries?: number
@@ -227,6 +245,37 @@ export class ApiClient {
     return this.request('/config/business', {
       method: 'PUT',
       body: config,
+    })
+  }
+
+  // Google Calendar endpoints
+  async initiateGoogleAuth(): Promise<{ status: string; valid: boolean }> {
+    return this.request<{ status: string; valid: boolean }>('/google/auth', {
+      method: 'POST',
+    })
+  }
+
+  async getGoogleAuthStatus(): Promise<{ authenticated: boolean }> {
+    return this.request<{ authenticated: boolean }>('/google/status')
+  }
+
+  async syncCalendar(): Promise<{ synced_events: number }> {
+    return this.request<{ synced_events: number }>('/calendar/sync', {
+      method: 'POST',
+    })
+  }
+
+  async getCalendarEvents(start?: string, days: number = 7): Promise<CalendarEvent[]> {
+    const params = new URLSearchParams()
+    if (start) params.append('start', start)
+    params.append('days', days.toString())
+    return this.request<CalendarEvent[]>(`/calendar/events?${params.toString()}`)
+  }
+
+  async createCalendarEvent(event: EventInput): Promise<CalendarEvent> {
+    return this.request<CalendarEvent>('/calendar/events', {
+      method: 'POST',
+      body: event,
     })
   }
 }

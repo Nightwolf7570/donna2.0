@@ -569,7 +569,62 @@ class WebhookHandler:
         
         if request.call_status in terminal_statuses:
             try:
+                # Get call state before ending it
+                call_state = await self._call_manager.get_call_state(request.call_sid)
+                
+                if call_state:
+                    # Analyze call outcome if we have a reasoning engine and transcript
+                    outcome_data = {}
+                    if self._reasoning_engine and call_state.transcript_history:
+                        try:
+                            # Use modeling for analysis
+                            outcome = await self._reasoning_engine.analyze_call_outcome(
+                                call_state.transcript_history
+                            )
+                            outcome_data = outcome.to_dict()
+                            logger.info(f"Analyzed call outcome: {outcome.decision_label}")
+                        except Exception as e:
+                            logger.error(f"Failed to analyze call outcome: {e}")
+                    
+                    # Persist to database
+                    from .database import get_database
+                    from datetime import datetime
+                    
+                    db = get_database()
+                    if db:
+                        call_doc = {
+                            "call_sid": call_state.call_sid,
+                            "caller_number": call_state.caller_number,
+                            "identified_name": call_state.context.get("caller_name"),
+                            "call_purpose": call_state.context.get("call_purpose"),
+                            "outcome": request.call_status,
+                            "timestamp": call_state.started_at,
+                            "end_timestamp": datetime.now(),
+                            "duration": request.call_duration or 0,
+                            "transcript": call_state.transcript_history,
+                            # Add analysis fields
+                            "summary": outcome_data.get("summary", "No summary available"),
+                            "decision": outcome_data.get("decision", "handled"),
+                            "decision_label": outcome_data.get("decision_label", "Call Processed"),
+                            "reasoning": outcome_data.get("reasoning", ""),
+                            "action_taken": outcome_data.get("action_taken", ""),
+                        }
+                        
+                        # Add company if found in context
+                        if "contacts" in call_state.context:
+                            for contact in call_state.context["contacts"]:
+                                if contact.get("company"):
+                                    call_doc["company"] = contact["company"]
+                                    break
+                        
+                        try:
+                            db.calls.insert_one(call_doc)
+                            logger.info(f"Saved call record for {request.call_sid}")
+                        except Exception as e:
+                            logger.error(f"Failed to save call record: {e}")
+
                 await self._call_manager.end_call(request.call_sid)
+                
             except KeyError:
                 # Call already ended or never started
                 logger.debug(f"Call {request.call_sid} not found in active calls")

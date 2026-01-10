@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { getApiClient } from '../api/client'
 
 interface Decision {
   id: string
@@ -17,90 +18,67 @@ interface DecisionTimelineProps {
   selectedCallId: string | null
 }
 
-const decisionStyles = {
+const decisionStyles: Record<string, string> = {
   handled: 'decision-handled',
   scheduled: 'decision-scheduled',
   escalated: 'decision-escalated',
   rejected: 'decision-rejected',
 }
 
-// Demo timeline data
-const demoDecisions: Decision[] = [
-  {
-    id: '1',
-    callerName: 'Sarah Chen',
-    company: 'Acme Corp',
-    duration: '4:32',
-    timestamp: new Date(Date.now() - 2 * 60000),
-    summary: 'VP of Engineering requesting a product demo. Mentioned they\'re evaluating solutions for Q2.',
-    decision: 'scheduled',
-    decisionLabel: 'Scheduled meeting',
-    reasoning: 'High-value prospect matching your target customer profile.',
-    actionTaken: 'Meeting booked: Tuesday 2:00 PM',
-  },
-  {
-    id: '2',
-    callerName: 'Unknown Caller',
-    company: null,
-    duration: '1:15',
-    timestamp: new Date(Date.now() - 15 * 60000),
-    summary: 'Cold call pitching SEO services. No prior relationship.',
-    decision: 'rejected',
-    decisionLabel: 'Rejected politely',
-    reasoning: 'Unsolicited sales call. Low relevance to current goals.',
-    actionTaken: 'Declined and ended call professionally.',
-  },
-  {
-    id: '3',
-    callerName: 'Michael Torres',
-    company: 'TechStart Inc',
-    duration: '2:48',
-    timestamp: new Date(Date.now() - 45 * 60000),
-    summary: 'Existing customer asking about API rate limits and upgrade options.',
-    decision: 'handled',
-    decisionLabel: 'Handled automatically',
-    reasoning: 'Standard support question. Found answer in knowledge base.',
-    actionTaken: 'Provided rate limit info and sent upgrade pricing via email.',
-  },
-  {
-    id: '4',
-    callerName: 'Emily Watson',
-    company: 'Design Studio',
-    duration: '3:21',
-    timestamp: new Date(Date.now() - 2 * 3600000),
-    summary: 'Partner agency requesting urgent callback about delayed deliverables.',
-    decision: 'escalated',
-    decisionLabel: 'Escalated to you',
-    reasoning: 'Urgent partner issue requiring your direct attention.',
-    actionTaken: 'Marked as high priority. Notification sent.',
-  },
-  {
-    id: '5',
-    callerName: 'James Liu',
-    company: 'Venture Capital',
-    duration: '5:12',
-    timestamp: new Date(Date.now() - 4 * 3600000),
-    summary: 'Investor from Series A round checking in on quarterly progress.',
-    decision: 'scheduled',
-    decisionLabel: 'Scheduled meeting',
-    reasoning: 'Existing investor relationship. Quarterly check-in is expected.',
-    actionTaken: 'Meeting booked: Thursday 10:00 AM',
-  },
-]
-
 export default function DecisionTimeline({ selectedCallId }: DecisionTimelineProps) {
-  const [decisions] = useState<Decision[]>(demoDecisions)
+  const [decisions, setDecisions] = useState<Decision[]>([])
   const [filter, setFilter] = useState<'all' | Decision['decision']>('all')
+  const [loading, setLoading] = useState(true)
 
-  const filteredDecisions = filter === 'all' 
-    ? decisions 
+  useEffect(() => {
+    const fetchDecisions = async () => {
+      try {
+        const client = getApiClient()
+        const calls = await client.getCallHistory(50)
+
+        const mappedDecisions: Decision[] = calls.map((call: any) => ({
+          id: call.call_sid,
+          callerName: call.identified_name || call.caller_number,
+          company: call.company || null,
+          duration: formatDuration(call.duration),
+          timestamp: new Date(call.timestamp),
+          summary: call.summary || 'No summary available',
+          decision: (call.decision?.toLowerCase() as Decision['decision']) || 'handled',
+          decisionLabel: call.decision_label || 'Processed',
+          reasoning: call.reasoning || 'No details provided',
+          actionTaken: call.action_taken || 'Call logged',
+        }))
+
+        setDecisions(mappedDecisions)
+      } catch (err) {
+        console.error('Error fetching decisions:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchDecisions()
+
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchDecisions, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const formatDuration = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
+
+  const filteredDecisions = filter === 'all'
+    ? decisions
     : decisions.filter(d => d.decision === filter)
 
   const formatTime = (date: Date): string => {
-    return date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
       minute: '2-digit',
-      hour12: true 
+      hour12: true
     })
   }
 
@@ -122,6 +100,20 @@ export default function DecisionTimeline({ selectedCallId }: DecisionTimelinePro
     return groups
   }, {} as Record<string, Decision[]>)
 
+  if (loading && decisions.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center text-gray-400">
+        <div className="flex flex-col items-center gap-2">
+          <svg className="animate-spin h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="text-sm">Loading timeline...</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -141,11 +133,10 @@ export default function DecisionTimeline({ selectedCallId }: DecisionTimelinePro
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                filter === f
-                  ? 'bg-slate-800 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
+              className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${filter === f
+                ? 'bg-slate-800 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
             >
               {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
             </button>
@@ -165,9 +156,8 @@ export default function DecisionTimeline({ selectedCallId }: DecisionTimelinePro
               {items.map((decision, idx) => (
                 <div
                   key={decision.id}
-                  className={`card p-5 animate-slide-up ${
-                    selectedCallId === decision.id ? 'ring-2 ring-slate-400' : ''
-                  }`}
+                  className={`card p-5 animate-slide-up ${selectedCallId === decision.id ? 'ring-2 ring-slate-400' : ''
+                    }`}
                   style={{ animationDelay: `${idx * 50}ms` }}
                 >
                   {/* Header */}
@@ -185,7 +175,7 @@ export default function DecisionTimeline({ selectedCallId }: DecisionTimelinePro
                         <span>{decision.duration}</span>
                       </div>
                     </div>
-                    <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${decisionStyles[decision.decision]}`}>
+                    <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${decisionStyles[decision.decision] || decisionStyles.handled}`}>
                       {decision.decisionLabel}
                     </span>
                   </div>
@@ -216,7 +206,7 @@ export default function DecisionTimeline({ selectedCallId }: DecisionTimelinePro
           </div>
         ))}
 
-        {filteredDecisions.length === 0 && (
+        {decisions.length === 0 && (
           <div className="text-center py-16 text-gray-500">
             <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />

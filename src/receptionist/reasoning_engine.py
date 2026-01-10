@@ -364,3 +364,103 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
     async def close(self) -> None:
         """Close the HTTP client."""
         await self._client.aclose()
+
+
+@dataclass
+class CallOutcome:
+    """Structured outcome of a call analysis."""
+    summary: str
+    decision: str  # handled, scheduled, escalated, rejected
+    decision_label: str
+    reasoning: str
+    action_taken: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary,
+            "decision": self.decision,
+            "decision_label": self.decision_label,
+            "reasoning": self.reasoning,
+            "action_taken": self.action_taken,
+        }
+    
+    
+    async def analyze_call_outcome(self, transcript_history: list[str]) -> CallOutcome:
+        """Analyze a full call transcript to determine the outcome.
+        
+        Args:
+            transcript_history: List of transcript segments from the call.
+            
+        Returns:
+            Structured CallOutcome with decision and reasoning.
+        """
+        full_transcript = "\n".join(transcript_history)
+        if not full_transcript.strip():
+            return CallOutcome(
+                summary="Empty call",
+                decision="rejected",
+                decision_label="No input",
+                reasoning="Caller did not speak.",
+                action_taken="No action."
+            )
+
+        system_prompt = self._build_system_prompt() + """
+
+You are analyzing a completed call log. Your job is to summarize the call and determine the final outcome.
+Output a JSON object with the following fields:
+- summary: A concise 1-sentence summary of what the caller wanted.
+- decision: One of ['handled', 'scheduled', 'escalated', 'rejected'].
+- decision_label: A short 2-3 word label for the decision (e.g., "Meeting booked", "Spam rejected").
+- reasoning: Why you made this decision.
+- action_taken: What specific action was taken during the call.
+
+Decision Guidelines:
+- scheduled: If a meeting, appointment, or follow-up was explicitly booked/confirmed.
+- escalated: If the caller needs to speak to the boss/human and you couldn't resolve it, or if it's high priority.
+- rejected: If it was spam, wrong number, or explicitly turned away.
+- handled: If the caller's question was answered or issue resolved automatically without needing further action.
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Here is the call transcript:\n\n{full_transcript}"}
+        ]
+
+        try:
+            response = await self._client.post(
+                self.FIREWORKS_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.MODEL,
+                    "messages": messages,
+                    "response_format": {"type": "json_object"},
+                    "max_tokens": 500,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            
+            result = json.loads(content)
+            
+            return CallOutcome(
+                summary=result.get("summary", "No summary available"),
+                decision=result.get("decision", "handled"),
+                decision_label=result.get("decision_label", "Call processed"),
+                reasoning=result.get("reasoning", "No reasoning provided"),
+                action_taken=result.get("action_taken", "Call logged")
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to analyze call outcome: {e}")
+            return CallOutcome(
+                summary="Failed to analyze call",
+                decision="handled",
+                decision_label="Processing Error",
+                reasoning=f"Error during analysis: {str(e)}",
+                action_taken="Logged for review"
+            )
+

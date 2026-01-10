@@ -50,6 +50,11 @@ class DatabaseManager:
         """Get the business_config collection for CEO/company settings."""
         return self.db["business_config"]
 
+    @property
+    def calendar_events(self) -> Collection:
+        """Get the calendar_events collection."""
+        return self.db["calendar_events"]
+
     def close(self) -> None:
         """Close the database connection."""
         if self._client is not None:
