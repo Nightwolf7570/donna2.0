@@ -1,0 +1,1 @@
+Take a look at the current information and come up with significant changes to the app that would make it 100x better for the target user experience. I want you to ultrathink on this and come back with a report on improvements that can be made for this application. Focus on the main purpose of the app and its target audience. 

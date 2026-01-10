@@ -1,0 +1,1 @@
+Ultrathink on why this is happening and identify the root cause. Sacrifise time for accuracy and intellegence. Report back if this is a quick fix or significant change to the codebase and steps to fix this issue.
