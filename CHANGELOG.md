@@ -22,6 +22,7 @@
 ### Changed
 - Database name changed to `donna_dev`
 - CLAUDE.md streamlined with concise structure
+- Removed mock data from `CallQueue` component
 
 ### Fixed
 - ElevenLabs TTS integration

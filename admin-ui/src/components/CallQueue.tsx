@@ -29,48 +29,10 @@ const priorityStyles = {
   low: 'priority-low',
 }
 
-// Demo data for UI showcase
-const demoQueue: QueueItem[] = [
-  {
-    id: '1',
-    callerName: 'Sarah Chen',
-    company: 'Acme Corp',
-    callType: 'scheduling',
-    priority: 'high',
-    timestamp: new Date(Date.now() - 2 * 60000),
-    isActive: true,
-  },
-  {
-    id: '2',
-    callerName: 'Unknown Caller',
-    company: null,
-    callType: 'pitch',
-    priority: 'low',
-    timestamp: new Date(Date.now() - 15 * 60000),
-    isActive: false,
-  },
-  {
-    id: '3',
-    callerName: 'Michael Torres',
-    company: 'TechStart Inc',
-    callType: 'question',
-    priority: 'medium',
-    timestamp: new Date(Date.now() - 45 * 60000),
-    isActive: false,
-  },
-  {
-    id: '4',
-    callerName: 'Emily Watson',
-    company: 'Design Studio',
-    callType: 'scheduling',
-    priority: 'high',
-    timestamp: new Date(Date.now() - 2 * 3600000),
-    isActive: false,
-  },
-]
+
 
 export default function CallQueue({ selectedId, onSelect }: CallQueueProps) {
-  const [queue, setQueue] = useState<QueueItem[]>(demoQueue)
+  const [queue, setQueue] = useState<QueueItem[]>([])
 
   useEffect(() => {
     const fetchCalls = async () => {
@@ -92,7 +54,7 @@ export default function CallQueue({ selectedId, onSelect }: CallQueueProps) {
           })))
         }
       } catch (e) {
-        // Keep demo data on error
+        console.error("Failed to fetch call queue", e)
       }
     }
 
@@ -120,13 +82,13 @@ export default function CallQueue({ selectedId, onSelect }: CallQueueProps) {
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / 60000)
-    
+
     if (diffMins < 1) return 'Just now'
     if (diffMins < 60) return `${diffMins}m ago`
-    
+
     const diffHours = Math.floor(diffMins / 60)
     if (diffHours < 24) return `${diffHours}h ago`
-    
+
     return date.toLocaleDateString()
   }
 
@@ -146,11 +108,10 @@ export default function CallQueue({ selectedId, onSelect }: CallQueueProps) {
           <button
             key={item.id}
             onClick={() => onSelect(selectedId === item.id ? null : item.id)}
-            className={`w-full text-left card p-4 transition-all ${
-              selectedId === item.id 
-                ? 'ring-2 ring-slate-400 ring-offset-2' 
-                : 'hover:border-gray-300'
-            } ${item.isActive ? 'border-l-4 border-l-green-500' : ''}`}
+            className={`w-full text-left card p-4 transition-all ${selectedId === item.id
+              ? 'ring-2 ring-slate-400 ring-offset-2'
+              : 'hover:border-gray-300'
+              } ${item.isActive ? 'border-l-4 border-l-green-500' : ''}`}
           >
             <div className="flex items-start justify-between mb-2">
               <div className="flex-1 min-w-0">
