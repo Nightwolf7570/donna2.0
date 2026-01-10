@@ -271,7 +271,7 @@ class WebhookHandler:
         return text_hash
     
     async def _add_speech(self, response: TwiMLResponse, text: str) -> TwiMLResponse:
-        """Add speech to TwiML response using ElevenLabs or fallback to Say.
+        """Add speech to TwiML response using Twilio's built-in Say verb for lowest latency.
         
         Args:
             response: TwiML response builder.
@@ -280,14 +280,8 @@ class WebhookHandler:
         Returns:
             Updated TwiML response.
         """
-        if self._use_elevenlabs and self._base_url:
-            audio_id = await self._cache_tts(text)
-            if audio_id:
-                response.play(self._get_audio_url(audio_id))
-                return response
-        
-        # Fallback to Twilio's Say verb
-        response.say(text)
+        # Use Twilio's built-in Say verb - lowest latency, no external API call
+        response.say(text, voice="Polly.Joanna")  # Natural female voice
         return response
     
     async def handle_incoming_call(self, request: TwilioRequest) -> TwiMLResponse:
