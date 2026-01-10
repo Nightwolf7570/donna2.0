@@ -22,7 +22,10 @@ from pydantic import BaseModel, Field
 
 from .call_manager import CallManager
 from .config import Settings, get_settings
+
 from .database import DatabaseManager, get_database
+from .google_auth import authenticate_google, SCOPES
+from .calendar_service import CalendarService
 from .models import BusinessConfig, Contact, Email, ValidationError
 from .reasoning_engine import ReasoningEngine
 from .vector_search import VectorSearch
@@ -83,11 +86,21 @@ class CallRecord(BaseModel):
     call_sid: str
     caller_number: str
     identified_name: str | None = None
+    company: str | None = None
     call_purpose: str | None = None
     outcome: str
     timestamp: datetime
     duration: int = 0
     transcript: list[str] = []
+    
+
+    
+    # Analysis fields
+    summary: str | None = None
+    decision: str | None = None
+    decision_label: str | None = None
+    reasoning: str | None = None
+    action_taken: str | None = None
 
 
 class SystemConfig(BaseModel):
@@ -120,6 +133,16 @@ class BusinessConfigResponse(BaseModel):
     company_description: str | None = None
 
 
+class EventInput(BaseModel):
+    """Input model for creating calendar events."""
+    
+    summary: str = Field(..., min_length=1)
+    description: str | None = None
+    start_time: datetime
+    end_time: datetime
+    attendees: list[str] = []
+
+
 # Global instances
 call_manager: CallManager | None = None
 voice_pipeline: VoicePipeline | None = None
@@ -127,6 +150,7 @@ reasoning_engine: ReasoningEngine | None = None
 vector_search: VectorSearch | None = None
 webhook_handler: WebhookHandler | None = None
 db_manager: DatabaseManager | None = None
+calendar_service: CalendarService | None = None
 
 # Audio cache for TTS (text hash -> audio bytes)
 audio_cache: dict[str, bytes] = {}
@@ -136,7 +160,7 @@ audio_cache: dict[str, bytes] = {}
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global call_manager, voice_pipeline, reasoning_engine, vector_search
-    global webhook_handler, db_manager
+    global webhook_handler, db_manager, calendar_service
     
     settings = get_settings()
     
@@ -179,6 +203,9 @@ async def lifespan(app: FastAPI):
         vector_search=vector_search,
         base_url=settings.base_url,
     )
+
+    # Initialize calendar service
+    calendar_service = CalendarService()
     
     logger.info("AI Receptionist started")
     yield
@@ -585,11 +612,17 @@ async def get_calls(
             call_sid=c.get("call_sid", ""),
             caller_number=c.get("caller_number", ""),
             identified_name=c.get("identified_name"),
+            company=c.get("company"),
             call_purpose=c.get("call_purpose"),
             outcome=c.get("outcome", "unknown"),
             timestamp=c.get("timestamp", datetime.now()),
             duration=c.get("duration", 0),
             transcript=c.get("transcript", []),
+            summary=c.get("summary"),
+            decision=c.get("decision"),
+            decision_label=c.get("decision_label"),
+            reasoning=c.get("reasoning"),
+            action_taken=c.get("action_taken"),
         )
         for c in calls
     ]
@@ -609,11 +642,17 @@ async def get_call(call_sid: str):
         call_sid=call.get("call_sid", ""),
         caller_number=call.get("caller_number", ""),
         identified_name=call.get("identified_name"),
+        company=call.get("company"),
         call_purpose=call.get("call_purpose"),
         outcome=call.get("outcome", "unknown"),
         timestamp=call.get("timestamp", datetime.now()),
         duration=call.get("duration", 0),
         transcript=call.get("transcript", []),
+        summary=call.get("summary"),
+        decision=call.get("decision"),
+        decision_label=call.get("decision_label"),
+        reasoning=call.get("reasoning"),
+        action_taken=call.get("action_taken"),
     )
 
 
@@ -748,6 +787,84 @@ async def get_dashboard_stats():
         stats["emailsIndexed"] = db_manager.emails.count_documents({})
     
     return stats
+
+
+# =============================================================================
+# Google Calendar & Auth Endpoints
+# =============================================================================
+
+@app.post("/google/auth")
+async def initiate_google_auth():
+    """Initiate Google OAuth flow.
+    
+    This will trigger the local browser flow if running locally.
+    In a headless server environment, this would need to return an auth URL.
+    """
+    try:
+        creds = authenticate_google()
+        return {"status": "authenticated", "valid": creds is not None and creds.valid}
+    except Exception as e:
+        logger.error(f"Auth failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/google/status")
+async def get_google_status():
+    """Check authentication status."""
+    import os
+    token_exists = os.path.exists("token.json")
+    return {"authenticated": token_exists}
+
+
+@app.post("/calendar/sync")
+async def sync_calendar():
+    """Sync calendar events to MongoDB."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Calendar service not available")
+    
+    try:
+        count = await calendar_service.sync_events_to_db()
+        return {"synced_events": count}
+    except Exception as e:
+        logger.error(f"Sync failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/calendar/events")
+async def list_calendar_events(
+    start: datetime | None = None,
+    days: int = 7
+):
+    """List upcoming calendar events."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Calendar service not available")
+    
+    from datetime import timedelta
+    if not start:
+        start = datetime.utcnow()
+    end = start + timedelta(days=days)
+    
+    return calendar_service.list_events(start_time=start, end_time=end)
+
+
+@app.post("/calendar/events")
+async def create_calendar_event(event: EventInput):
+    """Create a new calendar event."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Calendar service not available")
+    
+    result = calendar_service.create_event(
+        summary=event.summary,
+        start_time=event.start_time,
+        end_time=event.end_time,
+        attendees=event.attendees,
+        description=event.description
+    )
+    
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to create event")
+        
+    return result
 
 
 # =============================================================================

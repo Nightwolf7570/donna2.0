@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { getApiClient } from '../api/client'
 
-interface CalendarEvent {
+interface CalendarEventDisplay {
   id: string
   title: string
   time: string
@@ -22,20 +23,6 @@ interface AIControl {
   enabled: boolean
 }
 
-// Demo data
-const demoEvents: CalendarEvent[] = [
-  { id: '1', title: 'Sarah Chen - Product Demo', time: '2:00 PM', bookedBy: 'frontdesk', isToday: true },
-  { id: '2', title: 'Team Standup', time: '3:30 PM', bookedBy: 'user', isToday: true },
-  { id: '3', title: 'James Liu - Investor Check-in', time: '10:00 AM', bookedBy: 'frontdesk', isToday: false },
-  { id: '4', title: 'Design Review', time: '11:30 AM', bookedBy: 'rescheduled', isToday: false },
-]
-
-const demoAlerts: Alert[] = [
-  { id: '1', type: 'priority', message: 'High-priority caller Emily Watson attempted to reach you', timestamp: new Date(Date.now() - 30 * 60000) },
-  { id: '2', type: 'change', message: 'Meeting with Alex moved to 3:30 PM', timestamp: new Date(Date.now() - 2 * 3600000) },
-  { id: '3', type: 'reminder', message: 'Call with Sarah Chen in 15 minutes', timestamp: new Date(Date.now() - 15 * 60000) },
-]
-
 const defaultControls: AIControl[] = [
   { id: 'auto-schedule', label: 'Auto-schedule meetings', description: 'Let Front Desk book meetings on your behalf', enabled: true },
   { id: 'screen-sales', label: 'Screen sales calls', description: 'Automatically filter unsolicited pitches', enabled: true },
@@ -43,20 +30,72 @@ const defaultControls: AIControl[] = [
 ]
 
 export default function CalendarAlerts() {
-  const [events] = useState<CalendarEvent[]>(demoEvents)
-  const [alerts] = useState<Alert[]>(demoAlerts)
+  const [events, setEvents] = useState<CalendarEventDisplay[]>([])
+  const [alerts] = useState<Alert[]>([]) // Keeping mock alerts for now as backend doesn't serve them yet
   const [controls, setControls] = useState<AIControl[]>(defaultControls)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchEvents = async () => {
+      try {
+        const client = getApiClient()
+        // Check auth first - if not authenticated, we can't fetch events
+        // const authStatus = await client.getGoogleAuthStatus()
+        // if (!authStatus.authenticated) return 
+
+        const apiEvents = await client.getCalendarEvents()
+
+        const mappedEvents: CalendarEventDisplay[] = apiEvents.map(evt => {
+          // Parse start time
+          let dateObj: Date
+          // Handle 'dateTime' (timed) vs 'date' (all day)
+          if ('dateTime' in evt.start) {
+            dateObj = new Date(evt.start.dateTime)
+          } else {
+            dateObj = new Date(evt.start.date) // All day
+          }
+
+          const now = new Date()
+          const isToday = dateObj.toDateString() === now.toDateString()
+
+          // Format time: "10:00 AM" or "All Day"
+          const timeStr = 'dateTime' in evt.start
+            ? dateObj.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+            : 'All Day'
+
+          // Simple heuristic for bookedBy (could be improved with real metadata)
+          const bookedBy = evt.description?.includes('Donna') ? 'frontdesk' : 'user'
+
+          return {
+            id: evt.id,
+            title: evt.summary,
+            time: timeStr,
+            bookedBy,
+            isToday
+          }
+        })
+
+        setEvents(mappedEvents)
+      } catch (error) {
+        console.error("Failed to fetch calendar events:", error)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    fetchEvents()
+  }, [])
 
   const todayEvents = events.filter(e => e.isToday)
   const upcomingEvents = events.filter(e => !e.isToday)
 
   const toggleControl = (id: string) => {
-    setControls(controls.map(c => 
+    setControls(controls.map(c =>
       c.id === id ? { ...c, enabled: !c.enabled } : c
     ))
   }
 
-  const getBookedByLabel = (bookedBy: CalendarEvent['bookedBy']) => {
+  const getBookedByLabel = (bookedBy: CalendarEventDisplay['bookedBy']) => {
     switch (bookedBy) {
       case 'frontdesk': return 'Booked by Front Desk'
       case 'rescheduled': return 'Rescheduled automatically'
@@ -97,10 +136,10 @@ export default function CalendarAlerts() {
     const now = new Date()
     const diffMs = now.getTime() - date.getTime()
     const diffMins = Math.floor(diffMs / 60000)
-    
+
     if (diffMins < 1) return 'Just now'
     if (diffMins < 60) return `${diffMins}m ago`
-    
+
     const diffHours = Math.floor(diffMins / 60)
     return `${diffHours}h ago`
   }
@@ -112,52 +151,61 @@ export default function CalendarAlerts() {
         <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">
           Upcoming Schedule
         </h2>
-        
+
         <div className="card divide-y divide-gray-100">
-          {/* Today */}
-          {todayEvents.length > 0 && (
-            <div className="p-3">
-              <p className="text-xs font-medium text-gray-400 uppercase mb-2">Today</p>
-              <div className="space-y-2">
-                {todayEvents.map(event => (
-                  <div key={event.id} className="flex items-start gap-3">
-                    <span className="text-sm font-medium text-gray-900 w-16">{event.time}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-700 truncate">{event.title}</p>
-                      {getBookedByLabel(event.bookedBy) && (
-                        <p className="text-xs text-blue-600">{getBookedByLabel(event.bookedBy)}</p>
-                      )}
-                    </div>
+          {isLoading ? (
+            <div className="p-6 text-center text-gray-400">
+              <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent mr-2"></span>
+              Loading events...
+            </div>
+          ) : (
+            <>
+              {/* Today */}
+              {todayEvents.length > 0 && (
+                <div className="p-3">
+                  <p className="text-xs font-medium text-gray-400 uppercase mb-2">Today</p>
+                  <div className="space-y-2">
+                    {todayEvents.map(event => (
+                      <div key={event.id} className="flex items-start gap-3">
+                        <span className="text-sm font-medium text-gray-900 w-16">{event.time}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-700 truncate">{event.title}</p>
+                          {getBookedByLabel(event.bookedBy) && (
+                            <p className="text-xs text-blue-600">{getBookedByLabel(event.bookedBy)}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                </div>
+              )}
 
-          {/* Tomorrow / Upcoming */}
-          {upcomingEvents.length > 0 && (
-            <div className="p-3">
-              <p className="text-xs font-medium text-gray-400 uppercase mb-2">Tomorrow</p>
-              <div className="space-y-2">
-                {upcomingEvents.map(event => (
-                  <div key={event.id} className="flex items-start gap-3">
-                    <span className="text-sm font-medium text-gray-900 w-16">{event.time}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-gray-700 truncate">{event.title}</p>
-                      {getBookedByLabel(event.bookedBy) && (
-                        <p className="text-xs text-blue-600">{getBookedByLabel(event.bookedBy)}</p>
-                      )}
-                    </div>
+              {/* Tomorrow / Upcoming */}
+              {upcomingEvents.length > 0 && (
+                <div className="p-3">
+                  <p className="text-xs font-medium text-gray-400 uppercase mb-2">Tomorrow</p>
+                  <div className="space-y-2">
+                    {upcomingEvents.map(event => (
+                      <div key={event.id} className="flex items-start gap-3">
+                        <span className="text-sm font-medium text-gray-900 w-16">{event.time}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-700 truncate">{event.title}</p>
+                          {getBookedByLabel(event.bookedBy) && (
+                            <p className="text-xs text-blue-600">{getBookedByLabel(event.bookedBy)}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
+                </div>
+              )}
 
-          {events.length === 0 && (
-            <div className="p-6 text-center text-gray-500">
-              <p className="text-sm">No upcoming events</p>
-            </div>
+              {events.length === 0 && (
+                <div className="p-6 text-center text-gray-500">
+                  <p className="text-sm">No upcoming events found</p>
+                </div>
+              )}
+            </>
           )}
         </div>
       </section>
@@ -167,7 +215,7 @@ export default function CalendarAlerts() {
         <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">
           Important Alerts
         </h2>
-        
+
         <div className="space-y-2">
           {alerts.map(alert => (
             <div key={alert.id} className="card p-3 flex items-start gap-3">
@@ -192,7 +240,7 @@ export default function CalendarAlerts() {
         <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">
           AI Behavior
         </h2>
-        
+
         <div className="card divide-y divide-gray-100">
           {controls.map(control => (
             <div key={control.id} className="p-3 flex items-center justify-between">

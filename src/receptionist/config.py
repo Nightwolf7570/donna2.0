@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     # Base URL for TTS audio (ngrok URL in development)
     base_url: str = ""
 
+    # Google Auth
+    google_credentials_path: str = ""
+
 
 def get_settings() -> Settings:
     """Get application settings (cached)."""
