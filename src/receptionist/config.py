@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     # MongoDB Atlas
     mongodb_uri: str
+    database_name: str = "donna_dev"
 
     # Voyage AI (embeddings)
     voyage_api_key: str

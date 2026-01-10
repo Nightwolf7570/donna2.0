@@ -27,7 +27,7 @@ class DatabaseManager:
     def db(self) -> Database:
         """Get the receptionist database."""
         if self._db is None:
-            self._db = self.client["receptionist"]
+            self._db = self.client["donna_dev"]
         return self._db
 
     @property

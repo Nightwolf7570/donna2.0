@@ -1,34 +1,39 @@
 import { useState } from 'react'
-import Sidebar from './components/Sidebar'
-import Dashboard from './views/Dashboard'
+import TopNav from './components/TopNav'
+import CallQueue from './components/CallQueue'
+import DecisionTimeline from './components/DecisionTimeline'
+import CalendarAlerts from './components/CalendarAlerts'
 
-type View = 'dashboard' | 'calls' | 'contacts' | 'emails' | 'settings'
+export type StatusMode = 'on-duty' | 'quiet-hours' | 'do-not-disturb'
 
 function App() {
-  const [currentView, setCurrentView] = useState<View>('dashboard')
-
-  const renderView = () => {
-    switch (currentView) {
-      case 'dashboard':
-        return <Dashboard />
-      case 'calls':
-        return <div className="p-6"><h1 className="text-2xl font-bold">Call History</h1><p className="text-gray-600 mt-2">Coming soon...</p></div>
-      case 'contacts':
-        return <div className="p-6"><h1 className="text-2xl font-bold">Contact Manager</h1><p className="text-gray-600 mt-2">Coming soon...</p></div>
-      case 'emails':
-        return <div className="p-6"><h1 className="text-2xl font-bold">Email Manager</h1><p className="text-gray-600 mt-2">Coming soon...</p></div>
-      case 'settings':
-        return <div className="p-6"><h1 className="text-2xl font-bold">Settings</h1><p className="text-gray-600 mt-2">Coming soon...</p></div>
-      default:
-        return <Dashboard />
-    }
-  }
+  const [status, setStatus] = useState<StatusMode>('on-duty')
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(null)
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar currentView={currentView} onViewChange={setCurrentView} />
-      <main className="flex-1 overflow-auto">
-        {renderView()}
+    <div className="min-h-screen bg-[#f8f9fa] flex flex-col">
+      <TopNav status={status} onStatusChange={setStatus} />
+      
+      <main className="flex-1 flex justify-center px-6 py-6">
+        <div className="w-full max-w-[1400px] flex gap-6 h-[calc(100vh-88px)]">
+          {/* Left Column - 25% */}
+          <div className="w-1/4 min-w-[280px]">
+            <CallQueue 
+              selectedId={selectedCallId} 
+              onSelect={setSelectedCallId} 
+            />
+          </div>
+          
+          {/* Center Column - 50% */}
+          <div className="w-1/2 min-w-[500px]">
+            <DecisionTimeline selectedCallId={selectedCallId} />
+          </div>
+          
+          {/* Right Column - 25% */}
+          <div className="w-1/4 min-w-[280px]">
+            <CalendarAlerts />
+          </div>
+        </div>
       </main>
     </div>
   )

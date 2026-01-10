@@ -641,6 +641,34 @@ async def health_check():
     return status
 
 
+@app.get("/stats")
+async def get_dashboard_stats():
+    """Get dashboard statistics."""
+    from datetime import timedelta
+    
+    stats = {
+        "callsToday": 0,
+        "totalContacts": 0,
+        "emailsIndexed": 0,
+        "avgResponseTime": 1.2,  # Default placeholder
+    }
+    
+    if db_manager:
+        # Count calls from today
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        stats["callsToday"] = db_manager.calls.count_documents({
+            "timestamp": {"$gte": today_start}
+        })
+        
+        # Count total contacts
+        stats["totalContacts"] = db_manager.contacts.count_documents({})
+        
+        # Count indexed emails
+        stats["emailsIndexed"] = db_manager.emails.count_documents({})
+    
+    return stats
+
+
 # =============================================================================
 # TTS Audio Endpoint for ElevenLabs
 # =============================================================================
