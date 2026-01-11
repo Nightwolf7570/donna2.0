@@ -1,1 +1,5 @@
-"use strict";const e=require("electron");e.contextBridge.exposeInMainWorld("electronAPI",{checkServerConnection:n=>e.ipcRenderer.invoke("check-server-connection",n)});
+"use strict";
+const electron = require("electron");
+electron.contextBridge.exposeInMainWorld("electronAPI", {
+  checkServerConnection: (baseUrl) => electron.ipcRenderer.invoke("check-server-connection", baseUrl)
+});

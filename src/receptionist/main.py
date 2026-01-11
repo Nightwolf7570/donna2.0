@@ -196,18 +196,19 @@ async def lifespan(app: FastAPI):
         logger.warning(f"VectorSearch initialization failed: {e}")
         vector_search = None
     
-    # Initialize webhook handler
+    # Initialize calendar service (before webhook handler)
+    calendar_service = CalendarService()
+    
+    # Initialize webhook handler with all services
     webhook_handler = WebhookHandler(
         call_manager=call_manager,
         voice_pipeline=voice_pipeline,
         reasoning_engine=reasoning_engine,
         vector_search=vector_search,
+        calendar_service=calendar_service,
         base_url=settings.base_url,
         audio_cache=audio_cache,
     )
-
-    # Initialize calendar service
-    calendar_service = CalendarService()
     
     logger.info("AI Receptionist started")
     yield
