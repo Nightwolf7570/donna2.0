@@ -103,7 +103,7 @@ class ReasoningEngine:
             "type": "function",
             "function": {
                 "name": "check_calendar",
-                "description": "Check calendar availability for a specific date to see what times are free or busy",
+                "description": "Check calendar availability for a specific date to see what times are free or busy. Use this ONLY when the caller asks about availability without requesting to book.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -124,29 +124,29 @@ class ReasoningEngine:
             "type": "function",
             "function": {
                 "name": "schedule_meeting",
-                "description": "Schedule a meeting on the calendar with the caller",
+                "description": "CREATE a new meeting on Google Calendar. USE THIS when caller wants to book, schedule, set up, or create a meeting/appointment. This actually creates the calendar event.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "title": {
                             "type": "string",
-                            "description": "Meeting title or purpose"
+                            "description": "Meeting title or purpose (e.g., 'Project Planning', 'Doctor Appointment')"
                         },
                         "date": {
                             "type": "string",
-                            "description": "Meeting date (YYYY-MM-DD format)"
+                            "description": "Meeting date in YYYY-MM-DD format"
                         },
                         "time": {
                             "type": "string",
-                            "description": "Meeting start time (HH:MM in 24-hour format)"
+                            "description": "Start time in HH:MM 24-hour format (e.g., '21:00' for 9pm, '14:30' for 2:30pm)"
                         },
                         "duration_minutes": {
                             "type": "integer",
-                            "description": "Meeting duration in minutes (default 30)"
+                            "description": "Duration in minutes. Default 60 for 1 hour."
                         },
                         "attendee_name": {
                             "type": "string",
-                            "description": "Name of the caller/attendee"
+                            "description": "Name of the caller if provided"
                         },
                         "attendee_email": {
                             "type": "string",
@@ -159,33 +159,38 @@ class ReasoningEngine:
         }
     ]
 
-    BASE_SYSTEM_PROMPT = """You are Donna, a professional AI receptionist.
+    # Default timezone for calendar operations
+    DEFAULT_TIMEZONE = "America/Los_Angeles"
 
-You have access to the company's contacts, emails, and calendar. Use these tools silently to help callers - never mention that you're searching or using tools.
+    BASE_SYSTEM_PROMPT = """You are Donna, an AI receptionist. Speak naturally.
 
-CALENDAR CAPABILITIES:
-- You can check calendar availability for any date
-- You can schedule meetings for callers
-- When someone wants to schedule a meeting, ask for: the purpose, preferred date and time
-- Always confirm the meeting details before booking
-- After booking, confirm the meeting time with the caller
+CRITICAL: OUTPUT ONLY SPOKEN WORDS. NOTHING ELSE.
 
-CRITICAL RULES:
-- Output ONLY the naturally spoken response.
-- ABSOLUTELY NO internal monologue, "thinking out loud", or reasoning segments.
-- DO NOT use tags like <thinking>, <reasoning>, or <scratchpad>. 
-- NEVER narrate your internal processes (e.g., "Let me search", "I'm looking that up").
-- Answer questions directly and naturally as if you already know the information.
-- Only introduce yourself once at the start of the call.
-- Be warm, professional, and concise.
-- Use today's date for reference when caller says 'tomorrow', 'next week', etc.
+FORBIDDEN (will cause system failure):
+- <thinking>, <reasoning>, or ANY XML tags
+- "Let me...", "I'll...", "I'm checking...", "Looking up..."
+- Mentioning tools, searches, or internal processes
+- Step-by-step explanations
+- Any text that isn't what you'd say out loud
 
-Example scheduling conversation:
-Caller: "I'd like to schedule a meeting"
-GOOD: "Of course! What would you like to discuss, and when works best for you?"
-BAD: "Let me check the calendar... I'm using check_calendar to find available slots..."
+CALENDAR: You can schedule meetings. When someone wants to book:
+1. Ask what it's for (if not provided)
+2. Confirm the time
+3. Book it and confirm: "Done! I've scheduled [title] for [time]."
 
-Just answer naturally."""
+TIMEZONE: Pacific Time.
+
+EXAMPLES:
+User: "Schedule a meeting at 9pm today"
+You: "Sure! What's the meeting about?"
+
+User: "Dinner plans"  
+You: "Got it. I'll schedule 'Dinner plans' for 9 PM today. One moment... Done! You're all set."
+
+WRONG (never do this):
+- "Let me use the schedule_meeting tool..." ❌
+- "<thinking>I need to...</thinking>" ❌
+- "I'm going to check the calendar..." ❌"""
 
 
 
@@ -210,6 +215,88 @@ Just answer naturally."""
     def set_business_config(self, config: BusinessConfig) -> None:
         """Update the business configuration."""
         self._business_config = config
+
+    def _clean_ai_response(self, content: str) -> str:
+        """Aggressively clean AI response to remove all reasoning/thinking artifacts."""
+        
+        # If response contains multi-line reasoning, try to extract just the spoken part
+        # Look for patterns like "So the user..." or "According to..." which indicate internal thought
+        thinking_indicators = [
+            "The user wants", "Let me", "I need to", "According to", "Looking at",
+            "So the user", "They want", "I should", "My instructions", "Following",
+            "Actually", "Here,", "This is similar", "The time is", "They've given",
+        ]
+        
+        lines = content.split('\n')
+        clean_lines = []
+        in_reasoning = False
+        
+        for line in lines:
+            line_stripped = line.strip()
+            
+            # Skip empty lines at the start
+            if not line_stripped and not clean_lines:
+                continue
+            
+            # Check if this line looks like internal reasoning
+            is_reasoning = any(line_stripped.startswith(indicator) for indicator in thinking_indicators)
+            is_reasoning = is_reasoning or line_stripped.startswith("- ") and len(line_stripped) > 50  # bullet points of reasoning
+            is_reasoning = is_reasoning or "❌" in line_stripped or "✓" in line_stripped
+            is_reasoning = is_reasoning or re.match(r'^\d+\..*(?:first|then|next|after|finally)', line_stripped, re.IGNORECASE)
+            
+            if is_reasoning:
+                in_reasoning = True
+                continue
+            
+            # If we hit a short, natural-sounding sentence after reasoning, it might be the response
+            if in_reasoning and line_stripped and len(line_stripped) < 200:
+                # Check if it sounds like natural speech
+                natural_starters = ["Sure", "Got it", "Perfect", "Absolutely", "Of course", "Great", "Okay", 
+                                   "I've", "I have", "Done", "All set", "You're", "That's", "Yes", "No problem",
+                                   "One moment", "Alright", "Hi", "Hello", "Good"]
+                if any(line_stripped.startswith(s) for s in natural_starters):
+                    in_reasoning = False
+                    clean_lines.append(line_stripped)
+                    continue
+            
+            if not in_reasoning:
+                clean_lines.append(line_stripped)
+        
+        content = ' '.join(clean_lines)
+        
+        # Remove XML-style tags and their content
+        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<scratchpad>.*?</scratchpad>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<reflection>.*?</reflection>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<internal>.*?</internal>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<[^>]+>.*?</[^>]+>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'</?[a-z_]+>', '', content, flags=re.IGNORECASE)
+        
+        # Remove parenthetical asides about internal processing
+        content = re.sub(r'\([^)]*(?:check|search|look|find|use|tool|calendar|email)[^)]*\)', '', content, flags=re.IGNORECASE)
+        
+        # Remove tool call narration
+        content = re.sub(r"(?:Let me|I'll|I will|I'm going to|I am going to)\s+(?:check|search|look up|use|call|invoke|look at|see).*?(?:\.|!|$)", '', content, flags=re.IGNORECASE)
+        content = re.sub(r"(?:Using|Calling|Invoking|Checking|Looking at)\s+(?:the\s+)?(?:search_emails|search_contacts|check_calendar|schedule_meeting|calendar|tool).*?(?:\.|!|$)", '', content, flags=re.IGNORECASE)
+        
+        # Remove asterisk/bracket-wrapped actions
+        content = re.sub(r'\*[^*]+\*', '', content)
+        content = re.sub(r'\[[^\]]+\]', '', content)
+        
+        # Remove lines that are just "..."
+        content = re.sub(r'^\.\.\.$', '', content, flags=re.MULTILINE)
+        
+        # Clean up whitespace
+        content = re.sub(r'\n{2,}', ' ', content)
+        content = re.sub(r'  +', ' ', content)
+        content = content.strip()
+        
+        # If content is empty or too short after cleaning, return empty to trigger contextual fallback
+        if len(content) < 5:
+            return ""
+        
+        return content
 
     async def _build_system_prompt(self) -> str:
         """Build system prompt with business config and current date injected."""
@@ -243,7 +330,7 @@ Just answer naturally."""
             List of tool calls to execute.
         """
         messages = [
-            {"role": "system", "content": self._build_system_prompt()},
+            {"role": "system", "content": await self._build_system_prompt()},
         ]
         
         # Add conversation history if available
@@ -353,8 +440,14 @@ Just answer naturally."""
         elif context.get("meeting_error"):
             system_content += f"\n\nMEETING SCHEDULING FAILED: {context['meeting_error']}. Apologize and offer to try again."
 
-        # Add instruction to prevent tool narration and thinking
-        system_content += "\n\nIMPORTANT: Output ONLY the spoken response. Do NOT narrate your actions, mentioned tool names, or include any internal monologue/thinking. If you generate <thinking> tags, they will be stripped, but it is better not to generate them at all."
+        # Add strict instruction to prevent tool narration and thinking
+        system_content += """
+
+FINAL REMINDER - OUTPUT RULES:
+- Respond with ONLY what you would say out loud to the caller.
+- NO tags, NO thinking, NO reasoning, NO tool names, NO meta-commentary.
+- Speak naturally as if you already know everything.
+- If you're unsure, ask a natural clarifying question."""
 
         messages = [
             {"role": "system", "content": system_content},
@@ -379,7 +472,8 @@ Just answer naturally."""
                 json={
                     "model": self.MODEL,
                     "messages": messages,
-                    "max_tokens": 300,
+                    "max_tokens": 150,  # Short responses only
+                    "temperature": 0.7,
                 },
             )
             
@@ -393,17 +487,20 @@ Just answer naturally."""
             
             content = data["choices"][0]["message"]["content"]
             
-            # Filter out thinking tags and logic
-            # Remove <thinking>...</thinking>, <reasoning>...</reasoning>, etc.
-            content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
-            content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL)
-            content = re.sub(r'<scratchpad>.*?</scratchpad>', '', content, flags=re.DOTALL)
+            # AGGRESSIVE FILTERING - Remove ALL reasoning/thinking patterns
+            content = self._clean_ai_response(content)
             
-            # Remove line-based thinking prefixes if any (e.g. "Thinking: ...")
-            content = re.sub(r'^Thinking:.*$', '', content, flags=re.MULTILINE)
-            
-            # Clean up extra whitespace ledt behind
-            content = re.sub(r'\n{3,}', '\n\n', content).strip()
+            # If response got wiped, generate contextual fallback
+            if len(content) < 10:
+                if context.get("meeting_scheduled") and context.get("meeting_details"):
+                    details = context["meeting_details"]
+                    content = f"Done! I've scheduled '{details.get('title')}' for {details.get('time')} on {details.get('date')}. You're all set!"
+                elif context.get("meeting_error"):
+                    content = "I'm sorry, there was an issue scheduling that meeting. Would you like to try a different time?"
+                elif context.get("calendar_busy"):
+                    content = "I found some conflicts on the calendar. Let me tell you what times are available."
+                else:
+                    content = "How can I help you?"
             
             return content
             

@@ -2,6 +2,7 @@
   "name": "admin-ui",
   "version": "1.0.0",
   "description": "AI Receptionist Admin UI - Electron desktop application",
+  "author": "AI Receptionist Team",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",

@@ -569,47 +569,76 @@ class WebhookHandler:
                         call_sid, {"emails": emails}
                     )
             
-            elif tc.tool == Tool.CHECK_CALENDAR and self._calendar_service:
-                # Check calendar availability
+            elif tc.tool == Tool.CHECK_CALENDAR:
+                # Check calendar availability using google_auth service
                 date_str = tc.arguments.get("date", "")
                 time_pref = tc.arguments.get("time_preference", "")
                 if date_str:
                     try:
                         from datetime import datetime, timedelta
-                        # Parse date
+                        from zoneinfo import ZoneInfo
+                        from .google_auth import get_calendar_service
+                        
+                        google_service = get_calendar_service()
+                        if not google_service:
+                            logger.error("Google Calendar service not available")
+                            continue
+                        
+                        # Parse date in Pacific timezone
+                        pacific_tz = ZoneInfo("America/Los_Angeles")
                         check_date = datetime.strptime(date_str, "%Y-%m-%d")
+                        check_date = check_date.replace(hour=0, minute=0, second=0, tzinfo=pacific_tz)
                         end_date = check_date + timedelta(days=1)
                         
-                        events = self._calendar_service.list_events(
-                            time_min=check_date,
-                            time_max=end_date,
-                            max_results=10
-                        )
+                        # Query Google Calendar directly
+                        events_result = google_service.events().list(
+                            calendarId='primary',
+                            timeMin=check_date.isoformat(),
+                            timeMax=end_date.isoformat(),
+                            maxResults=10,
+                            singleEvents=True,
+                            orderBy='startTime'
+                        ).execute()
                         
-                        # Format availability info
+                        events = events_result.get('items', [])
+                        
+                        # Format availability info in human-readable format
                         if events:
                             busy_times = []
                             for event in events:
                                 start = event.get("start", {})
-                                time_str = start.get("dateTime", start.get("date", ""))
+                                time_raw = start.get("dateTime", start.get("date", ""))
                                 summary = event.get("summary", "Busy")
-                                busy_times.append(f"{time_str}: {summary}")
+                                
+                                # Parse and format time nicely
+                                try:
+                                    if "T" in time_raw:
+                                        event_time = datetime.fromisoformat(time_raw.replace("Z", "+00:00"))
+                                        event_time_pacific = event_time.astimezone(pacific_tz)
+                                        formatted_time = event_time_pacific.strftime("%I:%M %p").lstrip("0")
+                                    else:
+                                        formatted_time = "All day"
+                                except:
+                                    formatted_time = time_raw
+                                
+                                busy_times.append(f"{formatted_time}: {summary}")
                             context["calendar_busy"] = busy_times
-                            context["calendar_check_date"] = date_str
+                            context["calendar_check_date"] = check_date.strftime("%A, %B %d")
                         else:
                             context["calendar_busy"] = []
-                            context["calendar_check_date"] = date_str
+                            context["calendar_check_date"] = check_date.strftime("%A, %B %d")
                             context["calendar_available"] = True
                         
                         await self._call_manager.update_context(
                             call_sid, {
                                 "calendar_busy": context.get("calendar_busy", []),
-                                "calendar_check_date": date_str
+                                "calendar_check_date": context.get("calendar_check_date", date_str)
                             }
                         )
                         logger.info(f"Calendar check for {date_str}: {len(events)} events found")
                     except Exception as e:
                         logger.error(f"Calendar check failed: {e}")
+                        context["calendar_error"] = str(e)
             
             elif tc.tool == Tool.SCHEDULE_MEETING and self._calendar_service:
                 # Schedule a meeting
@@ -623,9 +652,30 @@ class WebhookHandler:
                 if date_str and time_str:
                     try:
                         from datetime import datetime, timedelta
-                        # Parse date and time
-                        datetime_str = f"{date_str} {time_str}"
-                        start_time = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+                        from zoneinfo import ZoneInfo
+                        from dateutil import parser as date_parser
+                        
+                        logger.info(f"Attempting to schedule: {title} on {date_str} at {time_str}")
+                        
+                        # Parse date and time robustly
+                        pacific_tz = ZoneInfo("America/Los_Angeles")
+                        
+                        try:
+                            # Try combining them
+                            datetime_str = f"{date_str} {time_str}"
+                            start_time = date_parser.parse(datetime_str)
+                        except:
+                            # Try parsing separately
+                            d = date_parser.parse(date_str)
+                            t = date_parser.parse(time_str)
+                            start_time = datetime.combine(d.date(), t.time())
+                        
+                        # Ensure timezone awareness (assuming Pacific as instructed)
+                        if start_time.tzinfo is None:
+                            start_time = start_time.replace(tzinfo=pacific_tz)
+                        else:
+                            start_time = start_time.astimezone(pacific_tz)
+                            
                         end_time = start_time + timedelta(minutes=duration)
                         
                         # Build description
@@ -633,32 +683,51 @@ class WebhookHandler:
                         if context.get("caller_number"):
                             description += f"\nCaller: {context['caller_number']}"
                         
-                        # Create the event
-                        attendees = [attendee_email] if attendee_email else []
-                        result = self._calendar_service.create_event(
-                            summary=title,
-                            start_time=start_time,
-                            end_time=end_time,
-                            attendees=attendees,
-                            description=description
-                        )
+                        # Create the event using google_auth service (uses file-based auth)
+                        from .google_auth import get_calendar_service
+                        google_service = get_calendar_service()
                         
-                        if result:
+                        if google_service:
+                            event_body = {
+                                'summary': title,
+                                'description': description,
+                                'start': {
+                                    'dateTime': start_time.isoformat(),
+                                    'timeZone': 'America/Los_Angeles',
+                                },
+                                'end': {
+                                    'dateTime': end_time.isoformat(),
+                                    'timeZone': 'America/Los_Angeles',
+                                },
+                            }
+                            
+                            if attendee_email:
+                                event_body['attendees'] = [{'email': attendee_email}]
+                            
+                            result = google_service.events().insert(
+                                calendarId='primary',
+                                body=event_body
+                            ).execute()
+                            
+                            # Format time for display (12-hour format)
+                            display_time = start_time.strftime("%I:%M %p").lstrip("0")
+                            display_date = start_time.strftime("%A, %B %d")
+                            
                             context["meeting_scheduled"] = True
                             context["meeting_details"] = {
                                 "title": title,
-                                "date": date_str,
-                                "time": time_str,
+                                "date": display_date,
+                                "time": display_time,
                                 "duration": duration,
                                 "link": result.get("htmlLink", "")
                             }
                             await self._call_manager.update_context(
                                 call_sid, {"meeting_scheduled": context["meeting_details"]}
                             )
-                            logger.info(f"Meeting scheduled: {title} at {start_time}")
+                            logger.info(f"Meeting scheduled: {title} at {display_time} on {display_date}")
                         else:
-                            context["meeting_error"] = "Failed to create calendar event"
-                            logger.error("Calendar event creation returned None")
+                            context["meeting_error"] = "Calendar service not authenticated"
+                            logger.error("Google Calendar service not available")
                     except Exception as e:
                         context["meeting_error"] = str(e)
                         logger.error(f"Meeting scheduling failed: {e}")
