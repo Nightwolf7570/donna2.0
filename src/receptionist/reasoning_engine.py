@@ -162,13 +162,13 @@ class ReasoningEngine:
             "type": "function",
             "function": {
                 "name": "end_call",
-                "description": "End the phone call gracefully. Use when: caller says goodbye/thanks/that's all, caller's request is complete, or conversation has naturally concluded.",
+                "description": "MUST USE when caller says: 'thank you', 'thanks', 'bye', 'goodbye', 'that's all', 'that's it', 'no thanks', 'I'm done', or any farewell. Also use after confirming a booking is complete.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "farewell_message": {
                             "type": "string",
-                            "description": "Brief goodbye message to say before hanging up (e.g., 'Goodbye!', 'Have a great day!')"
+                            "description": "Brief goodbye like 'You're welcome, goodbye!' or 'Have a great day!'"
                         }
                     },
                     "required": ["farewell_message"]

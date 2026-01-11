@@ -539,6 +539,15 @@ class WebhookHandler:
                 "call_purpose": caller_info.get("purpose"),
             })
         
+        # Check if caller is saying goodbye before even asking AI
+        goodbye_phrases = ["thank you", "thanks", "bye", "goodbye", "that's all", "that's it", "no thanks", "i'm done", "no that's it", "nope", "no thank you"]
+        speech_lower = speech_result.lower().strip()
+        
+        # If caller is clearly saying goodbye, skip AI and end call
+        if any(phrase in speech_lower for phrase in goodbye_phrases) and len(speech_lower) < 50:
+            logger.info(f"Caller said goodbye phrase: '{speech_result}' - ending call {call_sid}")
+            return ("You're welcome! Have a great day. Goodbye!", True)
+        
         # Decide what tools to use
         tool_calls = await self._reasoning_engine.decide_action(
             speech_result, context
@@ -767,17 +776,28 @@ class WebhookHandler:
         is_greeting = any(phrase in current_lower for phrase in greeting_phrases)
         
         if is_greeting and context.get("greeted"):
-            # AI is trying to greet again - this is wrong, regenerate or end
-            logger.warning(f"AI generated greeting when already greeted - forcing contextual response for {call_sid}")
-            # Generate a better response based on what the caller said
-            if speech_result and speech_result.strip():
-                response_text = f"I heard you say '{speech_result}'. Could you tell me more about what you need?"
+            # AI is trying to greet again - check if we scheduled something
+            logger.warning(f"AI generated greeting when already greeted - fixing for {call_sid}")
+            
+            if context.get("meeting_scheduled") and context.get("meeting_details"):
+                # We scheduled a meeting but AI didn't acknowledge it properly
+                details = context["meeting_details"]
+                response_text = f"Done! I've scheduled '{details.get('title', 'your appointment')}' for {details.get('time', '')} on {details.get('date', '')}. Anything else?"
+            elif speech_result and speech_result.strip():
+                # Check if caller is saying goodbye/thanks
+                goodbye_phrases = ["thank", "thanks", "bye", "goodbye", "that's all", "that's it", "no", "nothing"]
+                if any(phrase in speech_result.lower() for phrase in goodbye_phrases):
+                    response_text = "You're welcome! Have a great day. Goodbye!"
+                    should_end_call = True
+                else:
+                    # Acknowledge what they said
+                    response_text = "I understand. Let me help with that. What time works for you?"
             else:
                 response_text = "I'm sorry, I didn't catch that. Could you please repeat?"
         
-        # Also check for exact repetition in history
+        # Also check for exact repetition in history (but not for short responses)
         history = context.get("history", [])
-        if len(history) >= 1:
+        if len(history) >= 2 and len(current_lower) > 30:
             recent_responses = [h.get("assistant", "").lower().strip() for h in history[-2:]]
             
             # Check for exact repetition
