@@ -659,10 +659,14 @@ class WebhookHandler:
                 when = tc.arguments.get("when", "")
 
                 if not self._calendar_service.is_connected():
+                    logger.warning("Google Calendar not connected - cannot schedule appointment")
                     context["appointment_scheduled"] = {
                         "success": False,
                         "error": "Google Calendar not connected. Please authenticate first."
                     }
+                    await self._call_manager.update_context(
+                        call_sid, {"appointment_scheduled": context["appointment_scheduled"]}
+                    )
                 elif what and who and when:
                     # Parse the natural language date
                     appointment_time = self._parse_appointment_time(when)
@@ -693,11 +697,23 @@ class WebhookHandler:
                                 )
                                 logger.info(f"Scheduled appointment: {summary} at {appointment_time}")
                             else:
+                                logger.error("Calendar event creation returned None")
                                 context["appointment_scheduled"] = {"success": False, "error": "Failed to create event"}
+                                await self._call_manager.update_context(
+                                    call_sid, {"appointment_scheduled": context["appointment_scheduled"]}
+                                )
                         except ValueError as e:
+                            logger.error(f"Calendar event creation failed: {e}")
                             context["appointment_scheduled"] = {"success": False, "error": str(e)}
+                            await self._call_manager.update_context(
+                                call_sid, {"appointment_scheduled": context["appointment_scheduled"]}
+                            )
                     else:
+                        logger.warning(f"Could not parse appointment time: {when}")
                         context["appointment_scheduled"] = {"success": False, "error": f"Could not understand time: {when}"}
+                        await self._call_manager.update_context(
+                            call_sid, {"appointment_scheduled": context["appointment_scheduled"]}
+                        )
         
         # Refresh context from call state to get latest updates (including any history)
         call_state = await self._call_manager.get_call_state(call_sid)
