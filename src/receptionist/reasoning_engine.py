@@ -252,13 +252,14 @@ BAD: "<thinking>..." / "Let me use the tool..." ← NEVER"""
         content = re.sub(r'\([^)]*(?:check|search|look|find|use|tool|calendar|email|system|internal)[^)]*\)', '', content, flags=re.IGNORECASE)
         
         # Reasoning indicators that signal internal thought (case insensitive)
+        # Be careful not to remove valid spoken responses
         reasoning_patterns = [
-            r"^(?:The user|They|So,?\s+the|According to|Looking at|Here,|Actually,|Following|My instructions)",
-            r"^(?:I need to|I should|I will|I'll|Let me|I'm going to|I am going to)",
-            r"^(?:First,|Then,|Next,|After that,|Finally,|Now,|Step \d)",
-            r"^(?:The caller|This means|Based on|Given that|Since)",
-            r"^(?:Checking|Searching|Looking up|Using|Calling|Invoking)",
-            r"^(?:Okay so|Alright so|So basically|Hmm,|Well,\s+(?:the|I|let))",
+            r"^(?:The user|So,?\s+the|According to|Looking at|Here,|Following|My instructions)",
+            r"^(?:I need to|I should|I'm going to check|I am going to check|Let me check|Let me look|Let me search)",
+            r"^(?:First,|Then,|Next,|After that,|Finally,|Step \d)",
+            r"^(?:The caller|This means|Based on|Given that|Since the)",
+            r"^(?:Checking the|Searching for|Looking up|Using the|Calling the|Invoking)",
+            r"^(?:Okay so|Alright so|So basically|Hmm,)",
         ]
         
         lines = content.split('\n')
@@ -513,11 +514,13 @@ Reply with ONLY the spoken words. One or two sentences max. No explanations. No 
             data = response.json()
             
             content = data["choices"][0]["message"]["content"]
+            logger.debug(f"Raw AI response: {content[:200]}...")
             
-            # AGGRESSIVE FILTERING - Remove ALL reasoning/thinking patterns
+            # Clean response to remove any reasoning artifacts
             content = self._clean_ai_response(content)
+            logger.debug(f"Cleaned response: {content[:200] if content else '(empty)'}")
             
-            # If response got wiped, generate contextual fallback
+            # If response got wiped, generate contextual fallback based on conversation state
             if len(content) < 10:
                 if context.get("meeting_scheduled") and context.get("meeting_details"):
                     details = context["meeting_details"]
@@ -526,8 +529,12 @@ Reply with ONLY the spoken words. One or two sentences max. No explanations. No 
                     content = "I'm sorry, there was an issue scheduling that meeting. Would you like to try a different time?"
                 elif context.get("calendar_busy"):
                     content = "I found some conflicts on the calendar. Let me tell you what times are available."
+                elif context.get("history") and len(context["history"]) > 0:
+                    # We have conversation history - don't reset to greeting
+                    content = "I understand. Is there anything else I can help you with?"
                 else:
-                    content = "How can I help you?"
+                    # First message - greeting is appropriate
+                    content = "Hi! How can I help you today?"
             
             return content
             
