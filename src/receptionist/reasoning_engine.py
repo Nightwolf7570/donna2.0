@@ -556,17 +556,18 @@ OUTPUT FORMAT: Reply with ONLY spoken words. 1-2 sentences. No greetings if alre
         transcript_lower = transcript.lower()
         
         # Check if PM/AM is mentioned anywhere in the string
-        has_pm = bool(re.search(r'p\.?m\.?', transcript_lower))
-        has_am = bool(re.search(r'a\.?m\.?', transcript_lower))
+        has_pm = bool(re.search(r'p\.?m\.?|evening|tonight|afternoon', transcript_lower))
+        has_am = bool(re.search(r'a\.?m\.?|morning', transcript_lower))
         
         # Try to extract the FIRST time mentioned (not the second in "8 to 9")
         # Order matters - more specific patterns first
         time_patterns = [
             r'(?:at|from|for)\s+(\d{1,2}):(\d{2})',  # at 8:00
-            r'(?:at|from|for)\s+(\d{1,2})(?:\s|$|[^:\d])',  # at 8 (not followed by colon)
+            r'(?:at|from|for)\s+(?:like\s+)?(\d{1,2})(?:ish)?(?:\s|$|[^:\d])',  # at 8, at like 7ish
             r'(\d{1,2}):(\d{2})',  # 8:00 anywhere
-            r'(\d{1,2})\s*(?:p\.?m\.?|a\.?m\.?)',  # 8pm anywhere
+            r'(\d{1,2})(?:ish)?\s*(?:p\.?m\.?|a\.?m\.?)',  # 8pm, 7ish pm anywhere
             r'(\d{1,2})\s*o\'?clock',  # 8 o'clock
+            r'(\d{1,2})\s+(?:in the\s+)?(?:morning|evening|afternoon|tonight)',  # 10 in the morning
         ]
         
         start_hour = None
