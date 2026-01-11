@@ -480,8 +480,8 @@ class WebhookHandler:
         if "history" not in context:
             context["history"] = []
             
-        # Generate response using reasoning engine
-        response_text = await self._generate_ai_response(
+        # Generate response using reasoning engine (returns tuple with end_call flag)
+        response_text, should_end_call = await self._generate_ai_response(
             speech_result, context, call_sid
         )
         
@@ -493,9 +493,15 @@ class WebhookHandler:
             "timestamp": int(datetime.now().timestamp() * 1000)
         })
         
-        # Build TwiML response with ElevenLabs voice
+        # Build TwiML response
         await self._add_speech(response, response_text)
-        response.gather(action="/process-speech")
+        
+        # End call or continue listening
+        if should_end_call:
+            logger.info(f"Ending call {call_sid} - AI requested hangup")
+            response.hangup()
+        else:
+            response.gather(action="/process-speech")
         
         return response
 
@@ -504,7 +510,7 @@ class WebhookHandler:
         speech_result: str,
         context: dict[str, Any],
         call_sid: str,
-    ) -> str:
+    ) -> tuple[str, bool]:
         """Generate an AI response using the reasoning engine.
         
         Args:
@@ -513,10 +519,13 @@ class WebhookHandler:
             call_sid: The call identifier.
             
         Returns:
-            Generated response text.
+            Tuple of (response_text, should_end_call).
         """
         if not self._reasoning_engine:
-            return "Thank you for calling. How can I assist you today?"
+            return ("Thank you for calling. How can I assist you today?", False)
+        
+        # Track if we should end the call
+        should_end_call = False
         
         # Extract caller info from transcript
         caller_info = self._reasoning_engine.extract_caller_info(speech_result)
@@ -640,6 +649,13 @@ class WebhookHandler:
                         logger.error(f"Calendar check failed: {e}")
                         context["calendar_error"] = str(e)
             
+            elif tc.tool == Tool.END_CALL:
+                # AI wants to end the call
+                farewell = tc.arguments.get("farewell_message", "Goodbye!")
+                should_end_call = True
+                context["end_call_message"] = farewell
+                logger.info(f"AI requested end_call with message: {farewell}")
+            
             elif tc.tool == Tool.SCHEDULE_MEETING and self._calendar_service:
                 # Schedule a meeting
                 title = tc.arguments.get("title", "Meeting")
@@ -732,17 +748,21 @@ class WebhookHandler:
                         context["meeting_error"] = str(e)
                         logger.error(f"Meeting scheduling failed: {e}")
         
-        # Generate response with updated context
-        response_text = await self._reasoning_engine.generate_response(
-            speech_result, context
-        )
+        # If ending call, use the farewell message directly
+        if should_end_call and context.get("end_call_message"):
+            response_text = context["end_call_message"]
+        else:
+            # Generate response with updated context
+            response_text = await self._reasoning_engine.generate_response(
+                speech_result, context
+            )
         
         # Store conversation exchange in history
         history = context.get("history", [])
         history.append({"user": speech_result, "assistant": response_text})
         await self._call_manager.update_context(call_sid, {"history": history})
         
-        return response_text
+        return (response_text, should_end_call)
     
     async def handle_call_status(self, request: CallStatusRequest) -> dict[str, str]:
         """Process call status updates from Twilio.

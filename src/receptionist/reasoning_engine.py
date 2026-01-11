@@ -22,6 +22,7 @@ class Tool(Enum):
     SEARCH_CONTACTS = "search_contacts"
     CHECK_CALENDAR = "check_calendar"
     SCHEDULE_MEETING = "schedule_meeting"
+    END_CALL = "end_call"
     GENERATE_RESPONSE = "generate_response"
 
 
@@ -156,37 +157,46 @@ class ReasoningEngine:
                     "required": ["title", "date", "time"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "end_call",
+                "description": "End the phone call gracefully. Use when: caller says goodbye/thanks/that's all, caller's request is complete, or conversation has naturally concluded.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "farewell_message": {
+                            "type": "string",
+                            "description": "Brief goodbye message to say before hanging up (e.g., 'Goodbye!', 'Have a great day!')"
+                        }
+                    },
+                    "required": ["farewell_message"]
+                }
+            }
         }
     ]
 
     # Default timezone for calendar operations
     DEFAULT_TIMEZONE = "America/Los_Angeles"
 
-    BASE_SYSTEM_PROMPT = """You are Donna, a friendly AI receptionist. Output ONLY the exact words you would speak aloud on a phone call. Nothing else.
+    BASE_SYSTEM_PROMPT = """You are Donna, a friendly AI receptionist. Output ONLY the exact words you would speak aloud. Brief responses only.
 
-STRICT RULES:
-1. No internal thoughts, reasoning, or explanations
-2. No XML tags like <thinking> or <reasoning>
-3. No "Let me...", "I'll check...", "Looking up..." - just speak the result
-4. No mentioning tools, systems, or how you work
-5. No asterisks, brackets, or stage directions
-6. Keep responses brief and conversational (1-2 sentences max)
+RULES:
+1. No thinking, reasoning, or explanations - just speak
+2. No XML tags, asterisks, or brackets
+3. No "Let me check..." - just give the answer
+4. 1-2 sentences max per response
 
-CALENDAR: You can schedule meetings. Pacific Time zone.
-- If someone wants to book, ask what it's for (if not clear), then confirm once done
-- Say "Done!" or "All set!" when confirmed - not "I've scheduled using the tool..."
+CALENDAR: Pacific Time. Confirm bookings with "Done!" or "All set!"
 
-GOOD RESPONSES:
-"Hi, how can I help you today?"
-"Sure! What's the meeting for?"
-"Done! You're all set for 9 PM."
-"I don't see anything scheduled then. Want me to book that?"
+ENDING CALLS: Use end_call tool when:
+- Caller says goodbye, thanks, that's all, or similar
+- Request is complete and confirmed
+- Caller indicates they're done
 
-BAD RESPONSES (NEVER DO):
-"<thinking>The user wants...</thinking>" ← FORBIDDEN
-"Let me check the calendar tool..." ← FORBIDDEN
-"I'll use schedule_meeting to..." ← FORBIDDEN
-"*checks calendar*" ← FORBIDDEN"""
+GOOD: "Hi, how can I help?" / "Done! You're set for 9 PM." / "Goodbye, have a great day!"
+BAD: "<thinking>..." / "Let me use the tool..." / "*checks calendar*" ← NEVER"""
 
 
 
@@ -389,6 +399,8 @@ BAD RESPONSES (NEVER DO):
                         tool_calls.append(ToolCall(Tool.CHECK_CALENDAR, args))
                     elif tool_name == "schedule_meeting":
                         tool_calls.append(ToolCall(Tool.SCHEDULE_MEETING, args))
+                    elif tool_name == "end_call":
+                        tool_calls.append(ToolCall(Tool.END_CALL, args))
             
             return tool_calls
             
