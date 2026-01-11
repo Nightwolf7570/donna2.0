@@ -162,35 +162,31 @@ class ReasoningEngine:
     # Default timezone for calendar operations
     DEFAULT_TIMEZONE = "America/Los_Angeles"
 
-    BASE_SYSTEM_PROMPT = """You are Donna, an AI receptionist. Speak naturally.
+    BASE_SYSTEM_PROMPT = """You are Donna, a friendly AI receptionist. Output ONLY the exact words you would speak aloud on a phone call. Nothing else.
 
-CRITICAL: OUTPUT ONLY SPOKEN WORDS. NOTHING ELSE.
+STRICT RULES:
+1. No internal thoughts, reasoning, or explanations
+2. No XML tags like <thinking> or <reasoning>
+3. No "Let me...", "I'll check...", "Looking up..." - just speak the result
+4. No mentioning tools, systems, or how you work
+5. No asterisks, brackets, or stage directions
+6. Keep responses brief and conversational (1-2 sentences max)
 
-FORBIDDEN (will cause system failure):
-- <thinking>, <reasoning>, or ANY XML tags
-- "Let me...", "I'll...", "I'm checking...", "Looking up..."
-- Mentioning tools, searches, or internal processes
-- Step-by-step explanations
-- Any text that isn't what you'd say out loud
+CALENDAR: You can schedule meetings. Pacific Time zone.
+- If someone wants to book, ask what it's for (if not clear), then confirm once done
+- Say "Done!" or "All set!" when confirmed - not "I've scheduled using the tool..."
 
-CALENDAR: You can schedule meetings. When someone wants to book:
-1. Ask what it's for (if not provided)
-2. Confirm the time
-3. Book it and confirm: "Done! I've scheduled [title] for [time]."
+GOOD RESPONSES:
+"Hi, how can I help you today?"
+"Sure! What's the meeting for?"
+"Done! You're all set for 9 PM."
+"I don't see anything scheduled then. Want me to book that?"
 
-TIMEZONE: Pacific Time.
-
-EXAMPLES:
-User: "Schedule a meeting at 9pm today"
-You: "Sure! What's the meeting about?"
-
-User: "Dinner plans"  
-You: "Got it. I'll schedule 'Dinner plans' for 9 PM today. One moment... Done! You're all set."
-
-WRONG (never do this):
-- "Let me use the schedule_meeting tool..." ❌
-- "<thinking>I need to...</thinking>" ❌
-- "I'm going to check the calendar..." ❌"""
+BAD RESPONSES (NEVER DO):
+"<thinking>The user wants...</thinking>" ← FORBIDDEN
+"Let me check the calendar tool..." ← FORBIDDEN
+"I'll use schedule_meeting to..." ← FORBIDDEN
+"*checks calendar*" ← FORBIDDEN"""
 
 
 
@@ -219,17 +215,36 @@ WRONG (never do this):
     def _clean_ai_response(self, content: str) -> str:
         """Aggressively clean AI response to remove all reasoning/thinking artifacts."""
         
-        # If response contains multi-line reasoning, try to extract just the spoken part
-        # Look for patterns like "So the user..." or "According to..." which indicate internal thought
-        thinking_indicators = [
-            "The user wants", "Let me", "I need to", "According to", "Looking at",
-            "So the user", "They want", "I should", "My instructions", "Following",
-            "Actually", "Here,", "This is similar", "The time is", "They've given",
+        # First pass: Remove all XML-style tags and their content
+        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<scratchpad>.*?</scratchpad>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<reflection>.*?</reflection>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<internal>.*?</internal>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<response>.*?</response>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<output>.*?</output>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'<[^>]+>.*?</[^>]+>', '', content, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'</?[a-z_]+/?>', '', content, flags=re.IGNORECASE)
+        
+        # Remove asterisk/bracket-wrapped actions (stage directions)
+        content = re.sub(r'\*[^*]+\*', '', content)
+        content = re.sub(r'\[[^\]]+\]', '', content)
+        
+        # Remove parenthetical asides about internal processing
+        content = re.sub(r'\([^)]*(?:check|search|look|find|use|tool|calendar|email|system|internal)[^)]*\)', '', content, flags=re.IGNORECASE)
+        
+        # Reasoning indicators that signal internal thought (case insensitive)
+        reasoning_patterns = [
+            r"^(?:The user|They|So,?\s+the|According to|Looking at|Here,|Actually,|Following|My instructions)",
+            r"^(?:I need to|I should|I will|I'll|Let me|I'm going to|I am going to)",
+            r"^(?:First,|Then,|Next,|After that,|Finally,|Now,|Step \d)",
+            r"^(?:The caller|This means|Based on|Given that|Since)",
+            r"^(?:Checking|Searching|Looking up|Using|Calling|Invoking)",
+            r"^(?:Okay so|Alright so|So basically|Hmm,|Well,\s+(?:the|I|let))",
         ]
         
         lines = content.split('\n')
         clean_lines = []
-        in_reasoning = False
         
         for line in lines:
             line_stripped = line.strip()
@@ -238,59 +253,46 @@ WRONG (never do this):
             if not line_stripped and not clean_lines:
                 continue
             
-            # Check if this line looks like internal reasoning
-            is_reasoning = any(line_stripped.startswith(indicator) for indicator in thinking_indicators)
-            is_reasoning = is_reasoning or line_stripped.startswith("- ") and len(line_stripped) > 50  # bullet points of reasoning
-            is_reasoning = is_reasoning or "❌" in line_stripped or "✓" in line_stripped
-            is_reasoning = is_reasoning or re.match(r'^\d+\..*(?:first|then|next|after|finally)', line_stripped, re.IGNORECASE)
-            
-            if is_reasoning:
-                in_reasoning = True
+            # Skip lines with reasoning indicators
+            if any(re.match(pattern, line_stripped, re.IGNORECASE) for pattern in reasoning_patterns):
                 continue
             
-            # If we hit a short, natural-sounding sentence after reasoning, it might be the response
-            if in_reasoning and line_stripped and len(line_stripped) < 200:
-                # Check if it sounds like natural speech
-                natural_starters = ["Sure", "Got it", "Perfect", "Absolutely", "Of course", "Great", "Okay", 
-                                   "I've", "I have", "Done", "All set", "You're", "That's", "Yes", "No problem",
-                                   "One moment", "Alright", "Hi", "Hello", "Good"]
-                if any(line_stripped.startswith(s) for s in natural_starters):
-                    in_reasoning = False
-                    clean_lines.append(line_stripped)
-                    continue
+            # Skip bullet points that look like reasoning
+            if line_stripped.startswith("- ") and len(line_stripped) > 40:
+                continue
             
-            if not in_reasoning:
-                clean_lines.append(line_stripped)
+            # Skip lines with emojis commonly used for internal notes
+            if "❌" in line_stripped or "✓" in line_stripped or "✔" in line_stripped:
+                continue
+            
+            # Skip numbered lists that look like internal steps
+            if re.match(r'^\d+\.\s+', line_stripped) and any(
+                word in line_stripped.lower() for word in ['check', 'search', 'find', 'use', 'look', 'call', 'need']
+            ):
+                continue
+            
+            # Skip lines that mention tools by name
+            if any(tool in line_stripped.lower() for tool in ['search_emails', 'search_contacts', 'check_calendar', 'schedule_meeting']):
+                continue
+            
+            clean_lines.append(line_stripped)
         
         content = ' '.join(clean_lines)
         
-        # Remove XML-style tags and their content
-        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'<scratchpad>.*?</scratchpad>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'<reflection>.*?</reflection>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'<internal>.*?</internal>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'<[^>]+>.*?</[^>]+>', '', content, flags=re.DOTALL | re.IGNORECASE)
-        content = re.sub(r'</?[a-z_]+>', '', content, flags=re.IGNORECASE)
+        # Remove remaining tool call narration patterns
+        content = re.sub(r"(?:Let me|I'll|I will|I'm going to)\s+(?:check|search|look up|use|call|invoke|see|find).*?(?:\.|!|$)", '', content, flags=re.IGNORECASE)
+        content = re.sub(r"(?:Using|Calling|Invoking|Checking|Looking at|Searching)\s+(?:the\s+)?(?:search_emails|search_contacts|check_calendar|schedule_meeting|calendar|tool|system).*?(?:\.|!|$)", '', content, flags=re.IGNORECASE)
         
-        # Remove parenthetical asides about internal processing
-        content = re.sub(r'\([^)]*(?:check|search|look|find|use|tool|calendar|email)[^)]*\)', '', content, flags=re.IGNORECASE)
-        
-        # Remove tool call narration
-        content = re.sub(r"(?:Let me|I'll|I will|I'm going to|I am going to)\s+(?:check|search|look up|use|call|invoke|look at|see).*?(?:\.|!|$)", '', content, flags=re.IGNORECASE)
-        content = re.sub(r"(?:Using|Calling|Invoking|Checking|Looking at)\s+(?:the\s+)?(?:search_emails|search_contacts|check_calendar|schedule_meeting|calendar|tool).*?(?:\.|!|$)", '', content, flags=re.IGNORECASE)
-        
-        # Remove asterisk/bracket-wrapped actions
-        content = re.sub(r'\*[^*]+\*', '', content)
-        content = re.sub(r'\[[^\]]+\]', '', content)
-        
-        # Remove lines that are just "..."
-        content = re.sub(r'^\.\.\.$', '', content, flags=re.MULTILINE)
+        # Remove ellipsis lines
+        content = re.sub(r'\.{3,}', '', content)
         
         # Clean up whitespace
-        content = re.sub(r'\n{2,}', ' ', content)
-        content = re.sub(r'  +', ' ', content)
+        content = re.sub(r'\s{2,}', ' ', content)
         content = content.strip()
+        
+        # Remove trailing/leading punctuation artifacts
+        content = re.sub(r'^[.,!?\s]+', '', content)
+        content = re.sub(r'\s+[.,]+$', '.', content)
         
         # If content is empty or too short after cleaning, return empty to trigger contextual fallback
         if len(content) < 5:
@@ -443,11 +445,8 @@ WRONG (never do this):
         # Add strict instruction to prevent tool narration and thinking
         system_content += """
 
-FINAL REMINDER - OUTPUT RULES:
-- Respond with ONLY what you would say out loud to the caller.
-- NO tags, NO thinking, NO reasoning, NO tool names, NO meta-commentary.
-- Speak naturally as if you already know everything.
-- If you're unsure, ask a natural clarifying question."""
+CRITICAL OUTPUT FORMAT:
+Reply with ONLY the spoken words. One or two sentences max. No explanations. No thinking. No tags. No asterisks. Just speak."""
 
         messages = [
             {"role": "system", "content": system_content},
@@ -472,8 +471,9 @@ FINAL REMINDER - OUTPUT RULES:
                 json={
                     "model": self.MODEL,
                     "messages": messages,
-                    "max_tokens": 150,  # Short responses only
-                    "temperature": 0.7,
+                    "max_tokens": 100,  # Very short responses only
+                    "temperature": 0.4,  # Lower temperature = less verbose/creative
+                    "stop": ["<thinking>", "<reasoning>", "\n\n", "Let me"],  # Stop before reasoning
                 },
             )
             
