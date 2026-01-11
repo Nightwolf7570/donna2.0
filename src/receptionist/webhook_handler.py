@@ -540,7 +540,9 @@ class WebhookHandler:
             })
         
         # Check if caller is saying goodbye before even asking AI
-        goodbye_phrases = ["thank you", "thanks", "bye", "goodbye", "that's all", "that's it", "no thanks", "i'm done", "no that's it", "nope", "no thank you"]
+        goodbye_phrases = ["thank you", "thanks", "bye", "goodbye", "that's all", "that is all", 
+                          "that's it", "that is it", "no thanks", "i'm done", "i am done",
+                          "no that's it", "nope", "no thank you", "have a good", "take care"]
         speech_lower = speech_result.lower().strip()
         
         # If caller is clearly saying goodbye, skip AI and end call

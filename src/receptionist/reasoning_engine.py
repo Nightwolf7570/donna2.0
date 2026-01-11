@@ -555,11 +555,18 @@ OUTPUT FORMAT: Reply with ONLY spoken words. 1-2 sentences. No greetings if alre
         
         transcript_lower = transcript.lower()
         
-        # Try to extract time
+        # Check if PM/AM is mentioned anywhere in the string
+        has_pm = bool(re.search(r'p\.?m\.?', transcript_lower))
+        has_am = bool(re.search(r'a\.?m\.?', transcript_lower))
+        
+        # Try to extract the FIRST time mentioned (not the second in "8 to 9")
+        # Order matters - more specific patterns first
         time_patterns = [
-            r'(\d{1,2}):?(\d{2})?\s*(p\.?m\.?|a\.?m\.?)',  # 8:00 pm, 8pm, 8:00 p.m.
-            r'(\d{1,2})\s*(?:o\'?clock)?\s*(p\.?m\.?|a\.?m\.?)',  # 8 o'clock pm
-            r'(\d{1,2}):(\d{2})',  # 14:00 (24-hour)
+            r'(?:at|from|for)\s+(\d{1,2}):(\d{2})',  # at 8:00
+            r'(?:at|from|for)\s+(\d{1,2})(?:\s|$|[^:\d])',  # at 8 (not followed by colon)
+            r'(\d{1,2}):(\d{2})',  # 8:00 anywhere
+            r'(\d{1,2})\s*(?:p\.?m\.?|a\.?m\.?)',  # 8pm anywhere
+            r'(\d{1,2})\s*o\'?clock',  # 8 o'clock
         ]
         
         start_hour = None
@@ -570,23 +577,31 @@ OUTPUT FORMAT: Reply with ONLY spoken words. 1-2 sentences. No greetings if alre
             if match:
                 groups = match.groups()
                 start_hour = int(groups[0])
-                if groups[1] and groups[1].isdigit():
+                # Check if second group exists and is minutes
+                if len(groups) >= 2 and groups[1] and groups[1].isdigit():
                     start_minute = int(groups[1])
-                # Check for PM
-                pm_indicator = groups[-1] if len(groups) > 1 else ""
-                if pm_indicator and 'p' in pm_indicator.lower() and start_hour < 12:
-                    start_hour += 12
-                elif pm_indicator and 'a' in pm_indicator.lower() and start_hour == 12:
-                    start_hour = 0
                 break
         
         if start_hour is None:
             return None
         
-        # Try to extract title/purpose
+        # Apply PM/AM from anywhere in string
+        if has_pm and start_hour < 12:
+            start_hour += 12
+        elif has_am and start_hour == 12:
+            start_hour = 0
+        # If no AM/PM specified and hour is small (1-7), assume PM for appointments
+        elif not has_am and not has_pm and start_hour >= 1 and start_hour <= 7:
+            start_hour += 12
+        
+        if start_hour is None:
+            return None
+        
+        # Try to extract title/purpose - more patterns
         title_patterns = [
-            r'called\s+["\']?([^"\'\.]+)["\']?',  # called "tea time"
-            r'for\s+(?:a\s+)?["\']?([^"\'\.]+)["\']?',  # for a meeting
+            r'called\s+["\']?([a-z\s]+?)(?:\s+at|\s+from|\s+for|["\'\.]|$)',  # called tea time at
+            r'(?:set up|schedule|book)\s+(?:an?\s+)?([a-z\s]+?)\s+(?:at|from|for)\s+\d',  # set up tea time at 7
+            r'(?:meeting|appointment)\s+(?:called|named|for)\s+["\']?([^"\'\.]+)',  # meeting called X
             r'about\s+["\']?([^"\'\.]+)["\']?',  # about project review
         ]
         
@@ -594,8 +609,12 @@ OUTPUT FORMAT: Reply with ONLY spoken words. 1-2 sentences. No greetings if alre
         for pattern in title_patterns:
             match = re.search(pattern, transcript_lower)
             if match:
-                title = match.group(1).strip().title()
-                break
+                extracted = match.group(1).strip()
+                # Clean up common words
+                extracted = re.sub(r'^(an?|the|my)\s+', '', extracted)
+                if extracted and len(extracted) > 2 and extracted not in ['appointment', 'meeting']:
+                    title = extracted.title()
+                    break
         
         # Default to today
         now = datetime.now()
@@ -604,16 +623,18 @@ OUTPUT FORMAT: Reply with ONLY spoken words. 1-2 sentences. No greetings if alre
         # Check for day mentions
         if "tomorrow" in transcript_lower:
             date_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-        elif "monday" in transcript_lower or "tuesday" in transcript_lower or \
-             "wednesday" in transcript_lower or "thursday" in transcript_lower or \
-             "friday" in transcript_lower or "saturday" in transcript_lower or \
-             "sunday" in transcript_lower:
-            # Try to parse the date
-            try:
-                parsed = date_parser.parse(transcript, fuzzy=True)
-                date_str = parsed.strftime("%Y-%m-%d")
-            except:
-                pass
+        else:
+            # Check for day names
+            days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            for day in days:
+                if day in transcript_lower:
+                    try:
+                        parsed = date_parser.parse(transcript, fuzzy=True)
+                        if parsed.date() >= now.date():
+                            date_str = parsed.strftime("%Y-%m-%d")
+                    except:
+                        pass
+                    break
         
         time_str = f"{start_hour:02d}:{start_minute:02d}"
         
