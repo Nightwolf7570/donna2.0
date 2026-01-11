@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -19,6 +20,8 @@ class Tool(Enum):
     """Available tools for the reasoning engine."""
     SEARCH_EMAILS = "search_emails"
     SEARCH_CONTACTS = "search_contacts"
+    CHECK_CALENDAR = "check_calendar"
+    SCHEDULE_MEETING = "schedule_meeting"
     GENERATE_RESPONSE = "generate_response"
 
 
@@ -95,20 +98,94 @@ class ReasoningEngine:
                     "required": ["name"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_calendar",
+                "description": "Check calendar availability for a specific date to see what times are free or busy",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "date": {
+                            "type": "string",
+                            "description": "Date to check availability for (YYYY-MM-DD format)"
+                        },
+                        "time_preference": {
+                            "type": "string",
+                            "description": "Preferred time of day: morning, afternoon, or evening"
+                        }
+                    },
+                    "required": ["date"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_meeting",
+                "description": "Schedule a meeting on the calendar with the caller",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "Meeting title or purpose"
+                        },
+                        "date": {
+                            "type": "string",
+                            "description": "Meeting date (YYYY-MM-DD format)"
+                        },
+                        "time": {
+                            "type": "string",
+                            "description": "Meeting start time (HH:MM in 24-hour format)"
+                        },
+                        "duration_minutes": {
+                            "type": "integer",
+                            "description": "Meeting duration in minutes (default 30)"
+                        },
+                        "attendee_name": {
+                            "type": "string",
+                            "description": "Name of the caller/attendee"
+                        },
+                        "attendee_email": {
+                            "type": "string",
+                            "description": "Email of the caller if provided"
+                        }
+                    },
+                    "required": ["title", "date", "time"]
+                }
+            }
         }
     ]
 
-    BASE_SYSTEM_PROMPT = """You are Donna, an AI receptionist assistant. Your name is Donna. Your job is to:
-1. Identify who is calling and why
-2. Search for relevant context about the caller
-3. Provide helpful, professional responses
+    BASE_SYSTEM_PROMPT = """You are Donna, a professional AI receptionist.
 
+You have access to the company's contacts, emails, and calendar. Use these tools silently to help callers - never mention that you're searching or using tools.
 
-When a caller introduces themselves or states their purpose:
-- Use search_contacts to look up the caller if they give their name
-- Use search_emails to find relevant context about their topic
+CALENDAR CAPABILITIES:
+- You can check calendar availability for any date
+- You can schedule meetings for callers
+- When someone wants to schedule a meeting, ask for: the purpose, preferred date and time
+- Always confirm the meeting details before booking
+- After booking, confirm the meeting time with the caller
 
-Only introduce yourself as Donna at the very beginning of the call. Do NOT repeat your name or introduction in subsequent turns. Treat this as a continuous conversation. Be professional, warm, concise, and helpful."""
+CRITICAL RULES:
+- Output ONLY the naturally spoken response.
+- ABSOLUTELY NO internal monologue, "thinking out loud", or reasoning segments.
+- DO NOT use tags like <thinking>, <reasoning>, or <scratchpad>. 
+- NEVER narrate your internal processes (e.g., "Let me search", "I'm looking that up").
+- Answer questions directly and naturally as if you already know the information.
+- Only introduce yourself once at the start of the call.
+- Be warm, professional, and concise.
+- Use today's date for reference when caller says 'tomorrow', 'next week', etc.
+
+Example scheduling conversation:
+Caller: "I'd like to schedule a meeting"
+GOOD: "Of course! What would you like to discuss, and when works best for you?"
+BAD: "Let me check the calendar... I'm using check_calendar to find available slots..."
+
+Just answer naturally."""
 
 
 
@@ -134,9 +211,14 @@ Only introduce yourself as Donna at the very beginning of the call. Do NOT repea
         """Update the business configuration."""
         self._business_config = config
 
-    def _build_system_prompt(self) -> str:
-        """Build system prompt with business config injected."""
+    async def _build_system_prompt(self) -> str:
+        """Build system prompt with business config and current date injected."""
         prompt = self.BASE_SYSTEM_PROMPT
+        
+        # Inject today's date for relative time understanding
+        now = datetime.now()
+        date_info = f"\n\nCURRENT DATE AND TIME: {now.strftime('%A, %B %d, %Y %H:%M')}"
+        prompt += date_info
         
         if self._business_config:
             business_info = f"\n\nYou work for {self._business_config.ceo_name}."
@@ -214,6 +296,10 @@ Only introduce yourself as Donna at the very beginning of the call. Do NOT repea
                         tool_calls.append(ToolCall(Tool.SEARCH_EMAILS, args))
                     elif tool_name == "search_contacts":
                         tool_calls.append(ToolCall(Tool.SEARCH_CONTACTS, args))
+                    elif tool_name == "check_calendar":
+                        tool_calls.append(ToolCall(Tool.CHECK_CALENDAR, args))
+                    elif tool_name == "schedule_meeting":
+                        tool_calls.append(ToolCall(Tool.SCHEDULE_MEETING, args))
             
             return tool_calls
             
@@ -233,7 +319,8 @@ Only introduce yourself as Donna at the very beginning of the call. Do NOT repea
         Returns:
             Generated response text.
         """
-        system_content = self._build_system_prompt()
+        # Build system content with updated date and business info
+        system_content = await self._build_system_prompt()
         
         # Add context from searches
         if context.get("contacts"):
@@ -249,9 +336,25 @@ Only introduce yourself as Donna at the very beginning of the call. Do NOT repea
                 for e in context["emails"][:3]
             ])
             system_content += f"\n\nRelevant emails:\n{emails_info}"
+        
+        # Add calendar context
+        if context.get("calendar_busy"):
+            busy_info = "\n".join(context["calendar_busy"])
+            check_date = context.get("calendar_check_date", "the requested date")
+            system_content += f"\n\nCalendar for {check_date}:\n{busy_info}\n(Other times are available)"
+        elif context.get("calendar_available"):
+            check_date = context.get("calendar_check_date", "the requested date")
+            system_content += f"\n\nCalendar for {check_date}: All times are available."
+        
+        # Add meeting confirmation context
+        if context.get("meeting_scheduled") and context.get("meeting_details"):
+            details = context["meeting_details"]
+            system_content += f"\n\nMEETING CONFIRMED: '{details.get('title')}' scheduled for {details.get('date')} at {details.get('time')} for {details.get('duration', 30)} minutes."
+        elif context.get("meeting_error"):
+            system_content += f"\n\nMEETING SCHEDULING FAILED: {context['meeting_error']}. Apologize and offer to try again."
 
-        # Add instruction to prevent tool narration
-        system_content += "\n\nIMPORTANT: Do NOT narrate your actions or mention tool names (like search_emails). Just provide the natural spoken response to the caller."
+        # Add instruction to prevent tool narration and thinking
+        system_content += "\n\nIMPORTANT: Output ONLY the spoken response. Do NOT narrate your actions, mentioned tool names, or include any internal monologue/thinking. If you generate <thinking> tags, they will be stripped, but it is better not to generate them at all."
 
         messages = [
             {"role": "system", "content": system_content},
@@ -288,7 +391,21 @@ Only introduce yourself as Donna at the very beginning of the call. Do NOT repea
             response.raise_for_status()
             data = response.json()
             
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            
+            # Filter out thinking tags and logic
+            # Remove <thinking>...</thinking>, <reasoning>...</reasoning>, etc.
+            content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+            content = re.sub(r'<reasoning>.*?</reasoning>', '', content, flags=re.DOTALL)
+            content = re.sub(r'<scratchpad>.*?</scratchpad>', '', content, flags=re.DOTALL)
+            
+            # Remove line-based thinking prefixes if any (e.g. "Thinking: ...")
+            content = re.sub(r'^Thinking:.*$', '', content, flags=re.MULTILINE)
+            
+            # Clean up extra whitespace ledt behind
+            content = re.sub(r'\n{3,}', '\n\n', content).strip()
+            
+            return content
             
         except Exception as e:
             logger.error(f"Failed to generate response: {e}")
@@ -415,7 +532,7 @@ Only introduce yourself as Donna at the very beginning of the call. Do NOT repea
                 action_taken="No action."
             )
 
-        system_prompt = self._build_system_prompt() + """
+        system_prompt = await self._build_system_prompt() + """
 
 You are analyzing a completed call log. Your job is to summarize the call and determine the final outcome.
 Output a JSON object with the following fields:

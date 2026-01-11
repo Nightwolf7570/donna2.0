@@ -35,7 +35,7 @@ def authenticate_google() -> Credentials | None:
     settings = get_settings()
     
     # Check if credentials file is configured
-    creds_path = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
+    creds_path = settings.google_credentials_path or "credentials.json"
     
     # Load existing token
     if os.path.exists(TOKEN_FILE):

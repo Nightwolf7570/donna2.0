@@ -19,6 +19,7 @@ from .reasoning_engine import ReasoningEngine, Tool
 from .vector_search import VectorSearch
 from .voice_pipeline import VoicePipeline
 from .connection_manager import manager as connection_manager
+from .calendar_service import CalendarService
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +221,7 @@ class WebhookHandler:
         voice_pipeline: VoicePipeline,
         reasoning_engine: ReasoningEngine | None = None,
         vector_search: VectorSearch | None = None,
+        calendar_service: CalendarService | None = None,
         base_url: str = "",
         audio_cache: dict[str, bytes] | None = None,
     ) -> None:
@@ -230,6 +232,7 @@ class WebhookHandler:
             voice_pipeline: Pipeline for voice processing.
             reasoning_engine: Engine for AI reasoning (optional).
             vector_search: Vector search for context retrieval (optional).
+            calendar_service: Calendar service for scheduling (optional).
             base_url: Base URL for TTS audio endpoints (e.g., ngrok URL).
             audio_cache: Shared dictionary for caching TTS audio bytes.
         """
@@ -237,6 +240,7 @@ class WebhookHandler:
         self._voice_pipeline = voice_pipeline
         self._reasoning_engine = reasoning_engine
         self._vector_search = vector_search
+        self._calendar_service = calendar_service
         self._base_url = base_url
         self._use_elevenlabs = voice_pipeline.is_elevenlabs_enabled() if voice_pipeline else False
         
@@ -309,17 +313,21 @@ class WebhookHandler:
             request.call_sid, request.from_number
         )
         
-        # Get greeting message
+        # Get greeting from voice pipeline
         greeting = self._voice_pipeline.get_greeting()
         
-        # Build TwiML response
+        # Build TwiML response with proper conversation flow
         response = TwiMLResponse()
         await self._add_speech(response, greeting)
+        
+        # Gather speech input from caller - this is the conversation loop
         response.gather(
             action="/process-speech",
-            inner_say="Please go ahead.",
+            speech_timeout="auto",
         )
-        response.say("I didn't hear anything. Goodbye.")
+        
+        # Fallback if caller doesn't respond
+        response.say("I didn't hear anything. Please call back if you need assistance. Goodbye.")
         response.hangup()
         
         return response
@@ -560,6 +568,100 @@ class WebhookHandler:
                     await self._call_manager.update_context(
                         call_sid, {"emails": emails}
                     )
+            
+            elif tc.tool == Tool.CHECK_CALENDAR and self._calendar_service:
+                # Check calendar availability
+                date_str = tc.arguments.get("date", "")
+                time_pref = tc.arguments.get("time_preference", "")
+                if date_str:
+                    try:
+                        from datetime import datetime, timedelta
+                        # Parse date
+                        check_date = datetime.strptime(date_str, "%Y-%m-%d")
+                        end_date = check_date + timedelta(days=1)
+                        
+                        events = self._calendar_service.list_events(
+                            start_time=check_date,
+                            end_time=end_date,
+                            max_results=10
+                        )
+                        
+                        # Format availability info
+                        if events:
+                            busy_times = []
+                            for event in events:
+                                start = event.get("start", {})
+                                time_str = start.get("dateTime", start.get("date", ""))
+                                summary = event.get("summary", "Busy")
+                                busy_times.append(f"{time_str}: {summary}")
+                            context["calendar_busy"] = busy_times
+                            context["calendar_check_date"] = date_str
+                        else:
+                            context["calendar_busy"] = []
+                            context["calendar_check_date"] = date_str
+                            context["calendar_available"] = True
+                        
+                        await self._call_manager.update_context(
+                            call_sid, {
+                                "calendar_busy": context.get("calendar_busy", []),
+                                "calendar_check_date": date_str
+                            }
+                        )
+                        logger.info(f"Calendar check for {date_str}: {len(events)} events found")
+                    except Exception as e:
+                        logger.error(f"Calendar check failed: {e}")
+            
+            elif tc.tool == Tool.SCHEDULE_MEETING and self._calendar_service:
+                # Schedule a meeting
+                title = tc.arguments.get("title", "Meeting")
+                date_str = tc.arguments.get("date", "")
+                time_str = tc.arguments.get("time", "")
+                duration = tc.arguments.get("duration_minutes", 30)
+                attendee_name = tc.arguments.get("attendee_name", "")
+                attendee_email = tc.arguments.get("attendee_email", "")
+                
+                if date_str and time_str:
+                    try:
+                        from datetime import datetime, timedelta
+                        # Parse date and time
+                        datetime_str = f"{date_str} {time_str}"
+                        start_time = datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+                        end_time = start_time + timedelta(minutes=duration)
+                        
+                        # Build description
+                        description = f"Call with {attendee_name}" if attendee_name else "Phone call meeting"
+                        if context.get("caller_number"):
+                            description += f"\nCaller: {context['caller_number']}"
+                        
+                        # Create the event
+                        attendees = [attendee_email] if attendee_email else []
+                        result = self._calendar_service.create_event(
+                            summary=title,
+                            start_time=start_time,
+                            end_time=end_time,
+                            attendees=attendees,
+                            description=description
+                        )
+                        
+                        if result:
+                            context["meeting_scheduled"] = True
+                            context["meeting_details"] = {
+                                "title": title,
+                                "date": date_str,
+                                "time": time_str,
+                                "duration": duration,
+                                "link": result.get("htmlLink", "")
+                            }
+                            await self._call_manager.update_context(
+                                call_sid, {"meeting_scheduled": context["meeting_details"]}
+                            )
+                            logger.info(f"Meeting scheduled: {title} at {start_time}")
+                        else:
+                            context["meeting_error"] = "Failed to create calendar event"
+                            logger.error("Calendar event creation returned None")
+                    except Exception as e:
+                        context["meeting_error"] = str(e)
+                        logger.error(f"Meeting scheduling failed: {e}")
         
         # Generate response with updated context
         response_text = await self._reasoning_engine.generate_response(

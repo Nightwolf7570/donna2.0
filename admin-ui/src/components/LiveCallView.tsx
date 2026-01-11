@@ -44,8 +44,12 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
+
+          // Create a unique message ID based on call_sid, speaker, and text content
+          const messageId = `${data.call_sid}-${data.speaker}-${data.transcript}`
+
           const message: TranscriptMessage = {
-            id: `${data.call_sid}-${Date.now()}`,
+            id: messageId,
             callSid: data.call_sid,
             speaker: data.speaker || 'caller',
             text: data.transcript,
@@ -53,13 +57,19 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
           }
 
           setCurrentSpeaker(message.speaker)
-          
+
           // Clear speaker indicator after 2 seconds of no new messages
           setTimeout(() => setCurrentSpeaker(null), 2000)
 
           setTranscripts(prev => {
             const updated = new Map(prev)
             const existing = updated.get(data.call_sid) || []
+
+            // Deduplicate: check if message with same ID already exists
+            if (existing.some(m => m.id === messageId)) {
+              return prev // Skip duplicate
+            }
+
             updated.set(data.call_sid, [...existing, message])
             return updated
           })
@@ -77,11 +87,6 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
             }
             return prev
           })
-
-          // Auto-select if no call selected
-          if (!selectedCallId) {
-            onCallSelect(data.call_sid)
-          }
         } catch (e) {
           console.error('Failed to parse transcription:', e)
         }
@@ -104,7 +109,7 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
     return () => {
       wsRef.current?.close()
     }
-  }, [selectedCallId, onCallSelect])
+  }, []) // Empty dependency array - only connect once
 
   // Fetch active calls from API
   useEffect(() => {
@@ -112,7 +117,7 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
       try {
         const client = getApiClient()
         const calls = await client.getCallHistory(10)
-        
+
         // Filter for recent/active calls
         const recentCalls = calls
           .filter((c: any) => {
@@ -158,11 +163,11 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
   const selectedTranscripts = selectedCallId ? transcripts.get(selectedCallId) || [] : []
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', { 
-      hour: 'numeric', 
+    return date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
       minute: '2-digit',
       second: '2-digit',
-      hour12: true 
+      hour12: true
     })
   }
 
@@ -203,11 +208,10 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
             <button
               key={call.callSid}
               onClick={() => onCallSelect(call.callSid)}
-              className={`w-full text-left p-3 rounded-lg border transition-all ${
-                selectedCallId === call.callSid
+              className={`w-full text-left p-3 rounded-lg border transition-all ${selectedCallId === call.callSid
                   ? 'border-blue-500 bg-blue-50'
                   : 'border-gray-200 bg-white hover:border-gray-300'
-              }`}
+                }`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -279,16 +283,14 @@ export default function LiveCallView({ selectedCallId, onCallSelect }: LiveCallV
                     className={`flex ${msg.speaker === 'assistant' ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                        msg.speaker === 'assistant'
+                      className={`max-w-[80%] rounded-2xl px-4 py-2 ${msg.speaker === 'assistant'
                           ? 'bg-blue-500 text-white rounded-br-md'
                           : 'bg-gray-100 text-gray-900 rounded-bl-md'
-                      } ${idx === selectedTranscripts.length - 1 ? 'animate-slide-up' : ''}`}
+                        } ${idx === selectedTranscripts.length - 1 ? 'animate-slide-up' : ''}`}
                     >
                       <p className="text-sm">{msg.text}</p>
-                      <p className={`text-xs mt-1 ${
-                        msg.speaker === 'assistant' ? 'text-blue-200' : 'text-gray-400'
-                      }`}>
+                      <p className={`text-xs mt-1 ${msg.speaker === 'assistant' ? 'text-blue-200' : 'text-gray-400'
+                        }`}>
                         {formatTime(msg.timestamp)}
                       </p>
                     </div>
