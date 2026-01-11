@@ -392,6 +392,7 @@ NEVER DO: Repeat greetings, ask "how can I help" multiple times, ignore what cal
                 for tc in message["tool_calls"]:
                     func = tc.get("function", {})
                     tool_name = func.get("name")
+                    logger.info(f"AI called tool: {tool_name}")
                     try:
                         args = json.loads(func.get("arguments", "{}"))
                     except json.JSONDecodeError:
@@ -407,6 +408,18 @@ NEVER DO: Repeat greetings, ask "how can I help" multiple times, ignore what cal
                         tool_calls.append(ToolCall(Tool.SCHEDULE_MEETING, args))
                     elif tool_name == "end_call":
                         tool_calls.append(ToolCall(Tool.END_CALL, args))
+            else:
+                logger.warning(f"AI did not call any tools for: '{transcript[:50]}...'")
+            
+            # FALLBACK: If AI didn't call schedule_meeting but user is clearly asking to schedule
+            if not tool_calls:
+                schedule_keywords = ["schedule", "set up", "book", "appointment", "meeting", "p.m.", "pm", "a.m.", "am", "o'clock"]
+                transcript_lower = transcript.lower()
+                if any(kw in transcript_lower for kw in schedule_keywords):
+                    logger.info("Fallback: Detected scheduling request, parsing manually")
+                    parsed = self._parse_scheduling_request(transcript)
+                    if parsed:
+                        tool_calls.append(ToolCall(Tool.SCHEDULE_MEETING, parsed))
             
             return tool_calls
             
@@ -531,6 +544,87 @@ OUTPUT FORMAT: Reply with ONLY spoken words. 1-2 sentences. No greetings if alre
         except Exception as e:
             logger.error(f"Failed to generate response: {e}")
             return "I apologize, I'm having trouble processing your request. Could you please repeat that?"
+
+    def _parse_scheduling_request(self, transcript: str) -> dict[str, Any] | None:
+        """Parse a scheduling request from transcript without AI.
+        
+        Returns dict with title, date, time if parsing succeeds, None otherwise.
+        """
+        from datetime import datetime, timedelta
+        from dateutil import parser as date_parser
+        
+        transcript_lower = transcript.lower()
+        
+        # Try to extract time
+        time_patterns = [
+            r'(\d{1,2}):?(\d{2})?\s*(p\.?m\.?|a\.?m\.?)',  # 8:00 pm, 8pm, 8:00 p.m.
+            r'(\d{1,2})\s*(?:o\'?clock)?\s*(p\.?m\.?|a\.?m\.?)',  # 8 o'clock pm
+            r'(\d{1,2}):(\d{2})',  # 14:00 (24-hour)
+        ]
+        
+        start_hour = None
+        start_minute = 0
+        
+        for pattern in time_patterns:
+            match = re.search(pattern, transcript_lower)
+            if match:
+                groups = match.groups()
+                start_hour = int(groups[0])
+                if groups[1] and groups[1].isdigit():
+                    start_minute = int(groups[1])
+                # Check for PM
+                pm_indicator = groups[-1] if len(groups) > 1 else ""
+                if pm_indicator and 'p' in pm_indicator.lower() and start_hour < 12:
+                    start_hour += 12
+                elif pm_indicator and 'a' in pm_indicator.lower() and start_hour == 12:
+                    start_hour = 0
+                break
+        
+        if start_hour is None:
+            return None
+        
+        # Try to extract title/purpose
+        title_patterns = [
+            r'called\s+["\']?([^"\'\.]+)["\']?',  # called "tea time"
+            r'for\s+(?:a\s+)?["\']?([^"\'\.]+)["\']?',  # for a meeting
+            r'about\s+["\']?([^"\'\.]+)["\']?',  # about project review
+        ]
+        
+        title = "Appointment"
+        for pattern in title_patterns:
+            match = re.search(pattern, transcript_lower)
+            if match:
+                title = match.group(1).strip().title()
+                break
+        
+        # Default to today
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        
+        # Check for day mentions
+        if "tomorrow" in transcript_lower:
+            date_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        elif "monday" in transcript_lower or "tuesday" in transcript_lower or \
+             "wednesday" in transcript_lower or "thursday" in transcript_lower or \
+             "friday" in transcript_lower or "saturday" in transcript_lower or \
+             "sunday" in transcript_lower:
+            # Try to parse the date
+            try:
+                parsed = date_parser.parse(transcript, fuzzy=True)
+                date_str = parsed.strftime("%Y-%m-%d")
+            except:
+                pass
+        
+        time_str = f"{start_hour:02d}:{start_minute:02d}"
+        
+        logger.info(f"Parsed scheduling request: {title} on {date_str} at {time_str}")
+        
+        return {
+            "title": title,
+            "date": date_str,
+            "time": time_str,
+            "duration_minutes": 60
+        }
 
     def extract_caller_info(self, transcript: str) -> dict[str, str | None]:
         """Extract caller name and purpose from transcript.

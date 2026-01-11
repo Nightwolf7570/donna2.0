@@ -790,8 +790,10 @@ class WebhookHandler:
                     response_text = "You're welcome! Have a great day. Goodbye!"
                     should_end_call = True
                 else:
-                    # Acknowledge what they said
-                    response_text = "I understand. Let me help with that. What time works for you?"
+                    # Something went wrong - end the call gracefully
+                    logger.error(f"AI keeps generating greetings, ending call for {call_sid}")
+                    response_text = "I'm having some technical difficulties. Please try calling back in a moment. Goodbye!"
+                    should_end_call = True
             else:
                 response_text = "I'm sorry, I didn't catch that. Could you please repeat?"
         
