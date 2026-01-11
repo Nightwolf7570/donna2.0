@@ -125,33 +125,33 @@ class ReasoningEngine:
             "type": "function",
             "function": {
                 "name": "schedule_meeting",
-                "description": "CREATE a new meeting on Google Calendar. USE THIS when caller wants to book, schedule, set up, or create a meeting/appointment. This actually creates the calendar event.",
+                "description": "CREATE a calendar event. ONLY use this AFTER the caller confirms the details are correct. First ask for confirmation, then use this tool when they say yes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "title": {
                             "type": "string",
-                            "description": "Meeting title or purpose (e.g., 'Project Planning', 'Doctor Appointment')"
+                            "description": "Meeting title or purpose"
                         },
                         "date": {
                             "type": "string",
-                            "description": "Meeting date in YYYY-MM-DD format"
+                            "description": "Meeting date in YYYY-MM-DD format. Calculate from relative dates like 'tomorrow' or 'next Tuesday' using CURRENT DATE."
                         },
                         "time": {
                             "type": "string",
-                            "description": "Start time in HH:MM 24-hour format (e.g., '21:00' for 9pm, '14:30' for 2:30pm)"
+                            "description": "Start time in HH:MM 24-hour format (e.g., '14:00' for 2pm, '21:00' for 9pm)"
                         },
                         "duration_minutes": {
                             "type": "integer",
-                            "description": "Duration in minutes. Default 60 for 1 hour."
+                            "description": "Duration in minutes. Default 60."
                         },
                         "attendee_name": {
                             "type": "string",
-                            "description": "Name of the caller if provided"
+                            "description": "Caller's name if known"
                         },
                         "attendee_email": {
                             "type": "string",
-                            "description": "Email of the caller if provided"
+                            "description": "Caller's email if known"
                         }
                     },
                     "required": ["title", "date", "time"]
@@ -180,23 +180,31 @@ class ReasoningEngine:
     # Default timezone for calendar operations
     DEFAULT_TIMEZONE = "America/Los_Angeles"
 
-    BASE_SYSTEM_PROMPT = """You are Donna, a friendly AI receptionist. Output ONLY the exact words you would speak aloud. Brief responses only.
+    BASE_SYSTEM_PROMPT = """You are Donna, a friendly AI receptionist. Output ONLY spoken words. Be smart and helpful.
 
 RULES:
-1. No thinking, reasoning, or explanations - just speak
-2. No XML tags, asterisks, or brackets
-3. No "Let me check..." - just give the answer
-4. 1-2 sentences max per response
+1. No thinking/reasoning tags - just speak naturally
+2. No "Let me check..." - give answers directly
+3. Brief responses (1-2 sentences)
 
-CALENDAR: Pacific Time. Confirm bookings with "Done!" or "All set!"
+SCHEDULING MEETINGS (Pacific Time):
+- ALWAYS confirm before booking: "Just to confirm, you want [title] on [day], [date] at [time]. Is that correct?"
+- Wait for caller to say yes/correct/confirmed before using schedule_meeting
+- Be smart about dates: "tomorrow", "next Tuesday", "this Friday" - figure out the actual date
+- If time seems unusual (like 3 AM), double-check: "Did you mean 3 PM or 3 AM?"
+- After confirmation, book it and say "Done! You're all set."
 
-ENDING CALLS: Use end_call tool when:
-- Caller says goodbye, thanks, that's all, or similar
-- Request is complete and confirmed
-- Caller indicates they're done
+ENDING CALLS: Use end_call when caller says goodbye, thanks, or is done.
 
-GOOD: "Hi, how can I help?" / "Done! You're set for 9 PM." / "Goodbye, have a great day!"
-BAD: "<thinking>..." / "Let me use the tool..." / "*checks calendar*" ← NEVER"""
+EXAMPLES:
+Caller: "Schedule a meeting tomorrow at 2"
+You: "Sure! What's the meeting for?"
+Caller: "Project review"
+You: "Got it. Just to confirm - Project Review tomorrow, Wednesday January 8th at 2 PM. Sound right?"
+Caller: "Yes"
+You: [now use schedule_meeting] "Done! You're all set for 2 PM tomorrow."
+
+BAD: "<thinking>..." / "Let me use the tool..." ← NEVER"""
 
 
 
@@ -314,9 +322,16 @@ BAD: "<thinking>..." / "Let me use the tool..." / "*checks calendar*" ← NEVER"
         """Build system prompt with business config and current date injected."""
         prompt = self.BASE_SYSTEM_PROMPT
         
-        # Inject today's date for relative time understanding
+        # Inject comprehensive date info for smart scheduling
         now = datetime.now()
-        date_info = f"\n\nCURRENT DATE AND TIME: {now.strftime('%A, %B %d, %Y %H:%M')}"
+        tomorrow = now + __import__('datetime').timedelta(days=1)
+        
+        date_info = f"""
+
+CURRENT DATE/TIME: {now.strftime('%A, %B %d, %Y at %I:%M %p')} Pacific Time
+- Today is {now.strftime('%A, %B %d')}
+- Tomorrow is {tomorrow.strftime('%A, %B %d')}
+- Use these to calculate "next Monday", "this Friday", etc."""
         prompt += date_info
         
         if self._business_config:
