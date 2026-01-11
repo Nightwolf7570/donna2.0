@@ -14,6 +14,9 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [googleCalendarConnected, setGoogleCalendarConnected] = useState(false)
+  const [googleCalendarLoading, setGoogleCalendarLoading] = useState(false)
+
   const [apiKeys, setApiKeys] = useState({
     deepgram: '',
     fireworks: '',
@@ -33,9 +36,6 @@ export default function Settings() {
     language: 'en-US',
   })
 
-
-
-  // Fetch business config on mount
   // Fetch configs on mount
   useEffect(() => {
     const fetchConfig = async () => {
@@ -70,6 +70,48 @@ export default function Settings() {
     fetchConfig()
   }, [])
 
+  // Check Google Calendar status
+  useEffect(() => {
+    const checkGoogleCalendarStatus = async () => {
+      try {
+        const client = getApiClient()
+        const status = await client.getGoogleCalendarStatus()
+        setGoogleCalendarConnected(status.connected)
+      } catch (e) {
+        console.warn('Failed to check Google Calendar status:', e)
+      }
+    }
+    checkGoogleCalendarStatus()
+  }, [])
+
+  const handleConnectGoogleCalendar = async () => {
+    setGoogleCalendarLoading(true)
+    try {
+      const client = getApiClient()
+      const { auth_url } = await client.getGoogleAuthUrl()
+      window.location.href = auth_url
+    } catch (e) {
+      console.error('Failed to initiate Google Auth:', e)
+      setError('Failed to connect to Google Calendar')
+    } finally {
+      setGoogleCalendarLoading(false)
+    }
+  }
+
+  const handleDisconnectGoogleCalendar = async () => {
+    setGoogleCalendarLoading(true)
+    try {
+      const client = getApiClient()
+      await client.disconnectGoogleCalendar()
+      setGoogleCalendarConnected(false)
+    } catch (e) {
+      console.error('Failed to disconnect Google Calendar:', e)
+      setError('Failed to disconnect Google Calendar')
+    } finally {
+      setGoogleCalendarLoading(false)
+    }
+  }
+
   const sections: SettingsSection[] = [
     {
       id: 'api-keys',
@@ -89,6 +131,16 @@ export default function Settings() {
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      ),
+    },
+    {
+      id: 'integrations',
+      title: 'Integrations',
+      description: 'Connect external tools (Google Calendar, etc.)',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
       ),
     },
@@ -338,7 +390,52 @@ export default function Settings() {
             </div>
           )}
 
+          {activeSection === 'integrations' && (
+            <div className="card p-6 space-y-6">
+              <div>
+                <h2 className="text-lg font-semibold text-white mb-4">Integrations</h2>
+                <p className="text-sm text-[#a0a0b0] mb-6">
+                  Manage connections to external services.
+                </p>
+              </div>
 
+              <div className="flex items-center justify-between p-4 bg-[#1a1a24] rounded-lg border border-[#2a2a3a]">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center">
+                    <img src="https://www.google.com/favicon.ico" alt="Google" className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-white">Google Calendar</h3>
+                    <p className="text-sm text-[#a0a0b0]">Sync events and availability</p>
+                  </div>
+                </div>
+
+                {googleCalendarConnected ? (
+                  <div className="flex items-center gap-4">
+                    <span className="flex items-center gap-2 text-green-400 text-sm">
+                      <span className="w-2 h-2 rounded-full bg-green-400"></span>
+                      Connected
+                    </span>
+                    <button
+                      onClick={handleDisconnectGoogleCalendar}
+                      disabled={googleCalendarLoading}
+                      className="text-[#a0a0b0] hover:text-white hover:underline text-sm"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleConnectGoogleCalendar}
+                    disabled={googleCalendarLoading}
+                    className="btn-secondary"
+                  >
+                    {googleCalendarLoading ? 'Connecting...' : 'Connect'}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -26,6 +26,8 @@
 
 ### Fixed
 - ElevenLabs TTS integration
+- AI voice no longer speaks internal reasoning, tool calls, or monologue during calls
+- Calendar appointment failures now properly communicated to caller (context was being lost)
 
 ### Infrastructure
 - FastAPI backend with Twilio webhooks
