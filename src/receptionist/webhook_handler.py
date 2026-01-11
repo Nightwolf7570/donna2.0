@@ -476,9 +476,11 @@ class WebhookHandler:
             
         context = call_state.context
         
-        # Initialize history if needed
+        # Initialize history if needed - include the initial greeting so AI knows not to repeat it
         if "history" not in context:
             context["history"] = []
+            # Mark that greeting was already given
+            context["greeted"] = True
             
         # Generate response using reasoning engine (returns tuple with end_call flag)
         response_text, should_end_call = await self._generate_ai_response(
@@ -757,18 +759,30 @@ class WebhookHandler:
                 speech_result, context
             )
         
-        # Detect if AI is stuck in a loop (repeating same response)
+        # Detect if AI is stuck in a loop or generating greetings
+        current_lower = response_text.lower().strip()
+        
+        # Check if AI is generating a greeting when it shouldn't
+        greeting_phrases = ["how can i help", "how may i help", "what can i do for you", "how can i assist"]
+        is_greeting = any(phrase in current_lower for phrase in greeting_phrases)
+        
+        if is_greeting and context.get("greeted"):
+            # AI is trying to greet again - this is wrong, regenerate or end
+            logger.warning(f"AI generated greeting when already greeted - forcing contextual response for {call_sid}")
+            # Generate a better response based on what the caller said
+            if speech_result and speech_result.strip():
+                response_text = f"I heard you say '{speech_result}'. Could you tell me more about what you need?"
+            else:
+                response_text = "I'm sorry, I didn't catch that. Could you please repeat?"
+        
+        # Also check for exact repetition in history
         history = context.get("history", [])
-        if len(history) >= 2:
-            recent_responses = [h.get("assistant", "").lower().strip() for h in history[-3:]]
-            current_lower = response_text.lower().strip()
+        if len(history) >= 1:
+            recent_responses = [h.get("assistant", "").lower().strip() for h in history[-2:]]
             
-            # Check for repetition
-            repeat_count = sum(1 for r in recent_responses if r == current_lower or 
-                              "how can i help" in r or "how may i help" in r)
-            
-            if repeat_count >= 2:
-                logger.warning(f"Detected AI loop - forcing end call for {call_sid}")
+            # Check for exact repetition
+            if current_lower in recent_responses:
+                logger.warning(f"Detected AI loop (exact repeat) - forcing end call for {call_sid}")
                 response_text = "I'm sorry, I'm having trouble understanding. Please call back and I'll be happy to help. Goodbye!"
                 should_end_call = True
         

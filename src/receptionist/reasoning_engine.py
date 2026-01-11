@@ -460,11 +460,17 @@ NEVER DO: Repeat greetings, ask "how can I help" multiple times, ignore what cal
         elif context.get("meeting_error"):
             system_content += f"\n\nMEETING SCHEDULING FAILED: {context['meeting_error']}. Apologize and offer to try again."
 
+        # Tell AI that caller has already been greeted
+        if context.get("greeted"):
+            system_content += """
+
+IMPORTANT: You already greeted the caller with "Hello, this is Donna, your AI assistant. How may I help you today?"
+DO NOT greet again or ask "how can I help" - just respond to what they said."""
+        
         # Add strict instruction to prevent tool narration and thinking
         system_content += """
 
-CRITICAL OUTPUT FORMAT:
-Reply with ONLY the spoken words. One or two sentences max. No explanations. No thinking. No tags. No asterisks. Just speak."""
+OUTPUT FORMAT: Reply with ONLY spoken words. 1-2 sentences. No greetings if already greeted. Respond to their actual request."""
 
         messages = [
             {"role": "system", "content": system_content},
