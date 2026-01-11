@@ -125,33 +125,33 @@ class ReasoningEngine:
             "type": "function",
             "function": {
                 "name": "schedule_meeting",
-                "description": "CREATE a calendar event. ONLY use this AFTER the caller confirms the details are correct. First ask for confirmation, then use this tool when they say yes.",
+                "description": "CREATE a new meeting on Google Calendar. USE THIS when caller wants to book, schedule, set up, or create a meeting/appointment. This actually creates the calendar event.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "title": {
                             "type": "string",
-                            "description": "Meeting title or purpose"
+                            "description": "Meeting title or purpose (e.g., 'Project Planning', 'Doctor Appointment')"
                         },
                         "date": {
                             "type": "string",
-                            "description": "Meeting date in YYYY-MM-DD format. Calculate from relative dates like 'tomorrow' or 'next Tuesday' using CURRENT DATE."
+                            "description": "Meeting date in YYYY-MM-DD format"
                         },
                         "time": {
                             "type": "string",
-                            "description": "Start time in HH:MM 24-hour format (e.g., '14:00' for 2pm, '21:00' for 9pm)"
+                            "description": "Start time in HH:MM 24-hour format (e.g., '21:00' for 9pm, '14:30' for 2:30pm)"
                         },
                         "duration_minutes": {
                             "type": "integer",
-                            "description": "Duration in minutes. Default 60."
+                            "description": "Duration in minutes. Default 60 for 1 hour."
                         },
                         "attendee_name": {
                             "type": "string",
-                            "description": "Caller's name if known"
+                            "description": "Name of the caller if provided"
                         },
                         "attendee_email": {
                             "type": "string",
-                            "description": "Caller's email if known"
+                            "description": "Email of the caller if provided"
                         }
                     },
                     "required": ["title", "date", "time"]
@@ -180,31 +180,29 @@ class ReasoningEngine:
     # Default timezone for calendar operations
     DEFAULT_TIMEZONE = "America/Los_Angeles"
 
-    BASE_SYSTEM_PROMPT = """You are Donna, a friendly AI receptionist. Output ONLY spoken words. Be smart and helpful.
+    BASE_SYSTEM_PROMPT = """You are Donna, a friendly AI receptionist. Speak naturally and briefly.
 
 RULES:
-1. No thinking/reasoning tags - just speak naturally
-2. No "Let me check..." - give answers directly
-3. Brief responses (1-2 sentences)
+1. Output ONLY spoken words - no thinking, tags, or brackets
+2. 1-2 sentences max
+3. NEVER repeat yourself - if you already greeted them, don't greet again
+4. NEVER say "How can I help?" more than once per call
+5. Listen and respond to what they actually said
 
-SCHEDULING MEETINGS (Pacific Time):
-- ALWAYS confirm before booking: "Just to confirm, you want [title] on [day], [date] at [time]. Is that correct?"
-- Wait for caller to say yes/correct/confirmed before using schedule_meeting
-- Be smart about dates: "tomorrow", "next Tuesday", "this Friday" - figure out the actual date
-- If time seems unusual (like 3 AM), double-check: "Did you mean 3 PM or 3 AM?"
-- After confirmation, book it and say "Done! You're all set."
+CONVERSATION FLOW:
+- First response: Greet once, then LISTEN
+- After that: Respond to their request, don't ask generic questions
+- If they said something, acknowledge it specifically
+- If they're done: Use end_call tool
 
-ENDING CALLS: Use end_call when caller says goodbye, thanks, or is done.
+CALENDAR: Pacific Time. Say "Done!" when booked.
 
-EXAMPLES:
-Caller: "Schedule a meeting tomorrow at 2"
-You: "Sure! What's the meeting for?"
-Caller: "Project review"
-You: "Got it. Just to confirm - Project Review tomorrow, Wednesday January 8th at 2 PM. Sound right?"
-Caller: "Yes"
-You: [now use schedule_meeting] "Done! You're all set for 2 PM tomorrow."
+ENDING CALLS - Use end_call when:
+- Caller says goodbye/thanks/that's all
+- Task is complete
+- Conversation has concluded
 
-BAD: "<thinking>..." / "Let me use the tool..." ← NEVER"""
+NEVER DO: Repeat greetings, ask "how can I help" multiple times, ignore what caller said"""
 
 
 
@@ -252,14 +250,13 @@ BAD: "<thinking>..." / "Let me use the tool..." ← NEVER"""
         content = re.sub(r'\([^)]*(?:check|search|look|find|use|tool|calendar|email|system|internal)[^)]*\)', '', content, flags=re.IGNORECASE)
         
         # Reasoning indicators that signal internal thought (case insensitive)
-        # Be careful not to remove valid spoken responses
         reasoning_patterns = [
-            r"^(?:The user|So,?\s+the|According to|Looking at|Here,|Following|My instructions)",
-            r"^(?:I need to|I should|I'm going to check|I am going to check|Let me check|Let me look|Let me search)",
-            r"^(?:First,|Then,|Next,|After that,|Finally,|Step \d)",
-            r"^(?:The caller|This means|Based on|Given that|Since the)",
-            r"^(?:Checking the|Searching for|Looking up|Using the|Calling the|Invoking)",
-            r"^(?:Okay so|Alright so|So basically|Hmm,)",
+            r"^(?:The user|They|So,?\s+the|According to|Looking at|Here,|Actually,|Following|My instructions)",
+            r"^(?:I need to|I should|I will|I'll|Let me|I'm going to|I am going to)",
+            r"^(?:First,|Then,|Next,|After that,|Finally,|Now,|Step \d)",
+            r"^(?:The caller|This means|Based on|Given that|Since)",
+            r"^(?:Checking|Searching|Looking up|Using|Calling|Invoking)",
+            r"^(?:Okay so|Alright so|So basically|Hmm,|Well,\s+(?:the|I|let))",
         ]
         
         lines = content.split('\n')
@@ -323,16 +320,9 @@ BAD: "<thinking>..." / "Let me use the tool..." ← NEVER"""
         """Build system prompt with business config and current date injected."""
         prompt = self.BASE_SYSTEM_PROMPT
         
-        # Inject comprehensive date info for smart scheduling
+        # Inject today's date for relative time understanding
         now = datetime.now()
-        tomorrow = now + __import__('datetime').timedelta(days=1)
-        
-        date_info = f"""
-
-CURRENT DATE/TIME: {now.strftime('%A, %B %d, %Y at %I:%M %p')} Pacific Time
-- Today is {now.strftime('%A, %B %d')}
-- Tomorrow is {tomorrow.strftime('%A, %B %d')}
-- Use these to calculate "next Monday", "this Friday", etc."""
+        date_info = f"\n\nCURRENT DATE AND TIME: {now.strftime('%A, %B %d, %Y %H:%M')}"
         prompt += date_info
         
         if self._business_config:
@@ -514,13 +504,11 @@ Reply with ONLY the spoken words. One or two sentences max. No explanations. No 
             data = response.json()
             
             content = data["choices"][0]["message"]["content"]
-            logger.debug(f"Raw AI response: {content[:200]}...")
             
-            # Clean response to remove any reasoning artifacts
+            # AGGRESSIVE FILTERING - Remove ALL reasoning/thinking patterns
             content = self._clean_ai_response(content)
-            logger.debug(f"Cleaned response: {content[:200] if content else '(empty)'}")
             
-            # If response got wiped, generate contextual fallback based on conversation state
+            # If response got wiped, generate contextual fallback
             if len(content) < 10:
                 if context.get("meeting_scheduled") and context.get("meeting_details"):
                     details = context["meeting_details"]
@@ -529,12 +517,8 @@ Reply with ONLY the spoken words. One or two sentences max. No explanations. No 
                     content = "I'm sorry, there was an issue scheduling that meeting. Would you like to try a different time?"
                 elif context.get("calendar_busy"):
                     content = "I found some conflicts on the calendar. Let me tell you what times are available."
-                elif context.get("history") and len(context["history"]) > 0:
-                    # We have conversation history - don't reset to greeting
-                    content = "I understand. Is there anything else I can help you with?"
                 else:
-                    # First message - greeting is appropriate
-                    content = "Hi! How can I help you today?"
+                    content = "How can I help you?"
             
             return content
             

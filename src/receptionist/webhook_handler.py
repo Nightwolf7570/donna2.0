@@ -757,6 +757,21 @@ class WebhookHandler:
                 speech_result, context
             )
         
+        # Detect if AI is stuck in a loop (repeating same response)
+        history = context.get("history", [])
+        if len(history) >= 2:
+            recent_responses = [h.get("assistant", "").lower().strip() for h in history[-3:]]
+            current_lower = response_text.lower().strip()
+            
+            # Check for repetition
+            repeat_count = sum(1 for r in recent_responses if r == current_lower or 
+                              "how can i help" in r or "how may i help" in r)
+            
+            if repeat_count >= 2:
+                logger.warning(f"Detected AI loop - forcing end call for {call_sid}")
+                response_text = "I'm sorry, I'm having trouble understanding. Please call back and I'll be happy to help. Goodbye!"
+                should_end_call = True
+        
         # Store conversation exchange in history
         history = context.get("history", [])
         history.append({"user": speech_result, "assistant": response_text})
