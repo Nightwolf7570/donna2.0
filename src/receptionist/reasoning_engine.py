@@ -294,10 +294,12 @@ CRITICAL OUTPUT RULES:
             
             response.raise_for_status()
             data = response.json()
+            logger.info(f"Fireworks decide_action response status: {response.status_code}")
             
             tool_calls = []
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
+            logger.info(f"Tool calls in response: {message.get('tool_calls', 'None')}")
             
             if message.get("tool_calls"):
                 for tc in message["tool_calls"]:
@@ -394,11 +396,18 @@ CRITICAL OUTPUT RULES:
             data = response.json()
             
             content = data["choices"][0]["message"]["content"]
+            logger.info(f"Raw model response: {content[:200] if content else 'EMPTY'}...")
             
             # Remove all reasoning/internal monologue patterns
-            content = self._filter_reasoning(content)
+            filtered = self._filter_reasoning(content)
+            logger.info(f"Filtered response: {filtered[:200] if filtered else 'EMPTY'}...")
             
-            return content
+            # If filtering removed everything, return a safe fallback
+            if not filtered or not filtered.strip():
+                logger.warning("Response was empty after filtering, using fallback")
+                return "How can I help you today?"
+            
+            return filtered
             
         except Exception as e:
             logger.error(f"Failed to generate response: {e}")
