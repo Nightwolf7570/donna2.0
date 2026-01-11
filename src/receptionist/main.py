@@ -36,6 +36,7 @@ from .webhook_handler import (
     TwiMLResponse,
     WebhookHandler,
 )
+from .connection_manager import manager as connection_manager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -321,12 +322,26 @@ async def audio_stream(websocket: WebSocket):
     await webhook_handler.handle_audio_stream(websocket)
 
 
+@app.websocket("/ws/transcription")
+async def transcription_stream(websocket: WebSocket):
+    """WebSocket endpoint for live transcription updates to frontend."""
+    await connection_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive
+            await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        connection_manager.disconnect(websocket)
+
+
 # =============================================================================
 # Admin UI REST API - Contacts
 # =============================================================================
 
 @app.get("/contacts", response_model=list[ContactResponse])
-async def get_contacts(
+def get_contacts(
     limit: int = Query(default=100, ge=1, le=1000),
     skip: int = Query(default=0, ge=0),
 ):
@@ -351,7 +366,7 @@ async def get_contacts(
 
 
 @app.get("/contacts/{contact_id}", response_model=ContactResponse)
-async def get_contact(contact_id: str):
+def get_contact(contact_id: str):
     """Get a specific contact by ID."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -370,7 +385,7 @@ async def get_contact(contact_id: str):
 
 
 @app.post("/contacts", response_model=ContactResponse, status_code=201)
-async def create_contact(contact_input: ContactInput):
+def create_contact(contact_input: ContactInput):
     """Create a new contact."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -400,7 +415,7 @@ async def create_contact(contact_input: ContactInput):
 
 
 @app.put("/contacts/{contact_id}", response_model=ContactResponse)
-async def update_contact(contact_id: str, contact_input: ContactInput):
+def update_contact(contact_id: str, contact_input: ContactInput):
     """Update an existing contact."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -435,7 +450,7 @@ async def update_contact(contact_id: str, contact_input: ContactInput):
 
 
 @app.delete("/contacts/{contact_id}", status_code=204)
-async def delete_contact(contact_id: str):
+def delete_contact(contact_id: str):
     """Delete a contact."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -452,7 +467,7 @@ async def delete_contact(contact_id: str):
 # =============================================================================
 
 @app.get("/emails", response_model=list[EmailResponse])
-async def get_emails(
+def get_emails(
     limit: int = Query(default=100, ge=1, le=1000),
     skip: int = Query(default=0, ge=0),
 ):
@@ -477,7 +492,7 @@ async def get_emails(
 
 
 @app.get("/emails/{email_id}", response_model=EmailResponse)
-async def get_email(email_id: str):
+def get_email(email_id: str):
     """Get a specific email by ID."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -578,7 +593,7 @@ async def import_emails(bulk_import: BulkEmailImport):
 
 
 @app.delete("/emails/{email_id}", status_code=204)
-async def delete_email(email_id: str):
+def delete_email(email_id: str):
     """Delete an email."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -595,7 +610,7 @@ async def delete_email(email_id: str):
 # =============================================================================
 
 @app.get("/calls", response_model=list[CallRecord])
-async def get_calls(
+def get_calls(
     limit: int = Query(default=100, ge=1, le=1000),
     skip: int = Query(default=0, ge=0),
 ):
@@ -629,7 +644,7 @@ async def get_calls(
 
 
 @app.get("/calls/{call_sid}", response_model=CallRecord)
-async def get_call(call_sid: str):
+def get_call(call_sid: str):
     """Get details of a specific call."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -661,7 +676,7 @@ async def get_call(call_sid: str):
 # =============================================================================
 
 @app.get("/config", response_model=SystemConfig)
-async def get_config():
+def get_config():
     """Get system configuration (non-sensitive values only)."""
     settings = get_settings()
     
@@ -672,7 +687,7 @@ async def get_config():
 
 
 @app.put("/config", response_model=SystemConfig)
-async def update_config(config: SystemConfig):
+def update_config(config: SystemConfig):
     """Update system configuration.
     
     Note: This endpoint only updates runtime configuration.
@@ -690,7 +705,7 @@ async def update_config(config: SystemConfig):
 # =============================================================================
 
 @app.get("/config/business", response_model=BusinessConfigResponse)
-async def get_business_config():
+def get_business_config():
     """Get business configuration (CEO, company info)."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -707,7 +722,7 @@ async def get_business_config():
 
 
 @app.put("/config/business", response_model=BusinessConfigResponse)
-async def update_business_config(config_input: BusinessConfigInput):
+def update_business_config(config_input: BusinessConfigInput):
     """Update business configuration."""
     if not db_manager:
         raise HTTPException(status_code=503, detail="Database not available")
@@ -762,7 +777,7 @@ async def health_check():
 
 
 @app.get("/stats")
-async def get_dashboard_stats():
+def get_dashboard_stats():
     """Get dashboard statistics."""
     from datetime import timedelta
     
@@ -817,13 +832,13 @@ async def get_google_status():
 
 
 @app.post("/calendar/sync")
-async def sync_calendar():
+def sync_calendar():
     """Sync calendar events to MongoDB."""
     if not calendar_service:
         raise HTTPException(status_code=503, detail="Calendar service not available")
     
     try:
-        count = await calendar_service.sync_events_to_db()
+        count = calendar_service.sync_events_to_db()
         return {"synced_events": count}
     except Exception as e:
         logger.error(f"Sync failed: {e}")
@@ -831,7 +846,7 @@ async def sync_calendar():
 
 
 @app.get("/calendar/events")
-async def list_calendar_events(
+def list_calendar_events(
     start: datetime | None = None,
     days: int = 7
 ):
@@ -848,7 +863,7 @@ async def list_calendar_events(
 
 
 @app.post("/calendar/events")
-async def create_calendar_event(event: EventInput):
+def create_calendar_event(event: EventInput):
     """Create a new calendar event."""
     if not calendar_service:
         raise HTTPException(status_code=503, detail="Calendar service not available")

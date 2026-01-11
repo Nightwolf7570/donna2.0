@@ -134,7 +134,7 @@ class CalendarService:
             logger.error(f"Failed to delete event {event_id}: {e}")
             return False
 
-    async def sync_events_to_db(self, days: int = 30) -> int:
+    def sync_events_to_db(self, days: int = 30) -> int:
         """Sync upcoming events to MongoDB for context availability.
         
         Args:

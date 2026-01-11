@@ -103,11 +103,17 @@ class ReasoningEngine:
 2. Search for relevant context about the caller
 3. Provide helpful, professional responses
 
+
 When a caller introduces themselves or states their purpose:
 - Use search_contacts to look up the caller if they give their name
 - Use search_emails to find relevant context about their topic
 
+
 Always introduce yourself as Donna when appropriate. Be professional, warm, concise, and helpful."""
+
+
+
+
 
     def __init__(self, settings: Settings | None = None, business_config: BusinessConfig | None = None):
         """Initialize the ReasoningEngine with Fireworks AI client.
@@ -247,8 +253,16 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
 
         messages = [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": transcript},
         ]
+        
+        # Add conversation history before current message
+        if context.get("history"):
+            for entry in context["history"][-5:]:  # Last 5 exchanges
+                messages.append({"role": "user", "content": entry.get("user", "")})
+                if entry.get("assistant"):
+                    messages.append({"role": "assistant", "content": entry["assistant"]})
+        
+        messages.append({"role": "user", "content": transcript})
 
         try:
             response = await self._client.post(

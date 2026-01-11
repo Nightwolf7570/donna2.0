@@ -9,6 +9,7 @@ import base64
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -17,6 +18,7 @@ from .call_manager import CallManager, CallState
 from .reasoning_engine import ReasoningEngine, Tool
 from .vector_search import VectorSearch
 from .voice_pipeline import VoicePipeline
+from .connection_manager import manager as connection_manager
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +273,7 @@ class WebhookHandler:
         return text_hash
     
     async def _add_speech(self, response: TwiMLResponse, text: str) -> TwiMLResponse:
-        """Add speech to TwiML response using Twilio's built-in Say verb for lowest latency.
+        """Add speech using Deepgram TTS for consistent voice.
         
         Args:
             response: TwiML response builder.
@@ -280,8 +282,12 @@ class WebhookHandler:
         Returns:
             Updated TwiML response.
         """
-        # Use Twilio's built-in Say verb - lowest latency, no external API call
-        response.say(text, voice="Polly.Joanna")  # Natural female voice
+        audio_id = await self._cache_tts(text)
+        if audio_id and self._base_url:
+            response.play(self._get_audio_url(audio_id))
+        else:
+            # Fallback to Polly if TTS fails
+            response.say(text, voice="Polly.Joanna")
         return response
     
     async def handle_incoming_call(self, request: TwilioRequest) -> TwiMLResponse:
@@ -439,6 +445,14 @@ class WebhookHandler:
             f"Speech from {call_sid}: '{speech_result}' (confidence: {confidence})"
         )
         
+        # Broadcast user speech to frontend
+        await connection_manager.broadcast({
+            "call_sid": call_sid,
+            "speaker": "caller",
+            "transcript": speech_result,
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        })
+        
         response = TwiMLResponse()
         
         # Handle empty speech
@@ -464,6 +478,14 @@ class WebhookHandler:
         response_text = await self._generate_ai_response(
             speech_result, context, call_sid
         )
+        
+        # Broadcast assistant response to frontend
+        await connection_manager.broadcast({
+            "call_sid": call_sid,
+            "speaker": "assistant",
+            "transcript": response_text,
+            "timestamp": int(datetime.now().timestamp() * 1000)
+        })
         
         # Build TwiML response with ElevenLabs voice
         await self._add_speech(response, response_text)
@@ -544,9 +566,16 @@ class WebhookHandler:
                     )
         
         # Generate response with updated context
-        return await self._reasoning_engine.generate_response(
+        response_text = await self._reasoning_engine.generate_response(
             speech_result, context
         )
+        
+        # Store conversation exchange in history
+        history = context.get("history", [])
+        history.append({"user": speech_result, "assistant": response_text})
+        await self._call_manager.update_context(call_sid, {"history": history})
+        
+        return response_text
     
     async def handle_call_status(self, request: CallStatusRequest) -> dict[str, str]:
         """Process call status updates from Twilio.
