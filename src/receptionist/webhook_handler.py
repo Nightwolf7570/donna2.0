@@ -221,6 +221,7 @@ class WebhookHandler:
         reasoning_engine: ReasoningEngine | None = None,
         vector_search: VectorSearch | None = None,
         base_url: str = "",
+        audio_cache: dict[str, bytes] | None = None,
     ) -> None:
         """Initialize the webhook handler.
         
@@ -230,6 +231,7 @@ class WebhookHandler:
             reasoning_engine: Engine for AI reasoning (optional).
             vector_search: Vector search for context retrieval (optional).
             base_url: Base URL for TTS audio endpoints (e.g., ngrok URL).
+            audio_cache: Shared dictionary for caching TTS audio bytes.
         """
         self._call_manager = call_manager
         self._voice_pipeline = voice_pipeline
@@ -238,8 +240,8 @@ class WebhookHandler:
         self._base_url = base_url
         self._use_elevenlabs = voice_pipeline.is_elevenlabs_enabled() if voice_pipeline else False
         
-        # Audio cache for TTS
-        self._audio_cache: dict[str, bytes] = {}
+        # Audio cache for TTS (shared with main app)
+        self._audio_cache = audio_cache if audio_cache is not None else {}
     
     def _get_audio_url(self, audio_id: str) -> str:
         """Get the full URL for a cached audio file."""
@@ -262,10 +264,6 @@ class WebhookHandler:
                 audio_bytes = await self._voice_pipeline.synthesize_speech(text)
                 self._audio_cache[text_hash] = audio_bytes
                 
-                # Also add to global cache in main.py
-                from . import main
-                main.audio_cache[text_hash] = audio_bytes
-                
             except Exception as e:
                 logger.error(f"TTS caching failed: {e}")
                 return ""
@@ -286,8 +284,8 @@ class WebhookHandler:
         if audio_id and self._base_url:
             response.play(self._get_audio_url(audio_id))
         else:
-            # Fallback to Polly if TTS fails
-            response.say(text, voice="Polly.Joanna")
+            # Fallback to Polly if TTS fails (using Salli-Neural as preferred)
+            response.say(text, voice="Polly.Salli-Neural")
         return response
     
     async def handle_incoming_call(self, request: TwilioRequest) -> TwiMLResponse:
@@ -461,19 +459,19 @@ class WebhookHandler:
             response.gather(action="/process-speech")
             return response
         
-        # Update call transcript
-        try:
-            await self._call_manager.update_transcript(call_sid, speech_result)
-        except KeyError:
-            # Call not found, may have ended
-            await self._add_speech(response, "I'm sorry, there was an error. Goodbye.")
-            response.hangup()
-            return response
-        
         # Get call state for context
         call_state = await self._call_manager.get_call_state(call_sid)
-        context = call_state.context if call_state else {}
+        if not call_state:
+            logger.warning(f"Call {call_sid} not active")
+            response.hangup()
+            return response
+            
+        context = call_state.context
         
+        # Initialize history if needed
+        if "history" not in context:
+            context["history"] = []
+            
         # Generate response using reasoning engine
         response_text = await self._generate_ai_response(
             speech_result, context, call_sid
@@ -489,8 +487,6 @@ class WebhookHandler:
         
         # Build TwiML response with ElevenLabs voice
         await self._add_speech(response, response_text)
-        response.gather(action="/process-speech")
-        await self._add_speech(response, "Is there anything else I can help you with?")
         response.gather(action="/process-speech")
         
         return response

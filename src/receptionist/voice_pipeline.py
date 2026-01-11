@@ -43,8 +43,8 @@ class VoicePipeline:
         self._stt_sample_rate = "16000"
         
         # Default TTS options
-        self._tts_model = "aura-asteria-en"
-        self._tts_encoding = "linear16"
+        self._tts_model = "aura-2-thalia-en"
+        self._tts_encoding = "mp3"
         self._tts_sample_rate = 16000
 
     def is_elevenlabs_enabled(self) -> bool:

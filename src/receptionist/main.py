@@ -203,6 +203,7 @@ async def lifespan(app: FastAPI):
         reasoning_engine=reasoning_engine,
         vector_search=vector_search,
         base_url=settings.base_url,
+        audio_cache=audio_cache,
     )
 
     # Initialize calendar service

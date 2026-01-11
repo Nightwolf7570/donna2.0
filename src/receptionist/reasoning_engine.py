@@ -108,8 +108,7 @@ When a caller introduces themselves or states their purpose:
 - Use search_contacts to look up the caller if they give their name
 - Use search_emails to find relevant context about their topic
 
-
-Always introduce yourself as Donna when appropriate. Be professional, warm, concise, and helpful."""
+Only introduce yourself as Donna at the very beginning of the call. Do NOT repeat your name or introduction in subsequent turns. Treat this as a continuous conversation. Be professional, warm, concise, and helpful."""
 
 
 
@@ -250,6 +249,9 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
                 for e in context["emails"][:3]
             ])
             system_content += f"\n\nRelevant emails:\n{emails_info}"
+
+        # Add instruction to prevent tool narration
+        system_content += "\n\nIMPORTANT: Do NOT narrate your actions or mention tool names (like search_emails). Just provide the natural spoken response to the caller."
 
         messages = [
             {"role": "system", "content": system_content},
