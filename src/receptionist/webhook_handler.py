@@ -581,8 +581,8 @@ class WebhookHandler:
                         end_date = check_date + timedelta(days=1)
                         
                         events = self._calendar_service.list_events(
-                            start_time=check_date,
-                            end_time=end_date,
+                            time_min=check_date,
+                            time_max=end_date,
                             max_results=10
                         )
                         

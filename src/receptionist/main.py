@@ -197,7 +197,23 @@ async def lifespan(app: FastAPI):
         vector_search = None
     
     # Initialize calendar service (before webhook handler)
-    calendar_service = CalendarService()
+    try:
+        from .calendar_service import CalendarService
+        if db_manager and settings.google_credentials_path:
+            import json
+            with open(settings.google_credentials_path, "r") as f:
+                creds_data = json.load(f)
+                installed = creds_data.get("installed", {})
+                calendar_service = CalendarService(
+                    client_id=installed.get("client_id", ""),
+                    client_secret=installed.get("client_secret", ""),
+                    redirect_uri=f"{settings.base_url}/google/callback" if settings.base_url else "http://localhost:8000/google/callback",
+                    tokens_collection=db_manager.db.calendar_tokens
+                )
+                logger.info("CalendarService initialized")
+    except Exception as e:
+        logger.warning(f"Calendar service initialization failed: {e}")
+        calendar_service = None
     
     # Initialize webhook handler with all services
     webhook_handler = WebhookHandler(
