@@ -55,6 +55,11 @@ class DatabaseManager:
         """Get the calendar_events collection."""
         return self.db["calendar_events"]
 
+    @property
+    def calendar_tokens(self) -> Collection:
+        """Get the calendar_tokens collection."""
+        return self.db["calendar_tokens"]
+
     def close(self) -> None:
         """Close the database connection."""
         if self._client is not None:

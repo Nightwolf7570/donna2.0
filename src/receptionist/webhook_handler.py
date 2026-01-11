@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import WebSocket, WebSocketDisconnect
 
 from .call_manager import CallManager, CallState
+from .calendar_service import CalendarService
 from .reasoning_engine import ReasoningEngine, Tool
 from .vector_search import VectorSearch
 from .voice_pipeline import VoicePipeline
@@ -220,6 +221,7 @@ class WebhookHandler:
         voice_pipeline: VoicePipeline,
         reasoning_engine: ReasoningEngine | None = None,
         vector_search: VectorSearch | None = None,
+        calendar_service: CalendarService | None = None,
         base_url: str = "",
     ) -> None:
         """Initialize the webhook handler.
@@ -229,12 +231,14 @@ class WebhookHandler:
             voice_pipeline: Pipeline for voice processing.
             reasoning_engine: Engine for AI reasoning (optional).
             vector_search: Vector search for context retrieval (optional).
+            calendar_service: Calendar service for scheduling (optional).
             base_url: Base URL for TTS audio endpoints (e.g., ngrok URL).
         """
         self._call_manager = call_manager
         self._voice_pipeline = voice_pipeline
         self._reasoning_engine = reasoning_engine
         self._vector_search = vector_search
+        self._calendar_service = calendar_service
         self._base_url = base_url
         self._use_elevenlabs = voice_pipeline.is_elevenlabs_enabled() if voice_pipeline else False
         
@@ -289,6 +293,87 @@ class WebhookHandler:
             # Fallback to Polly if TTS fails
             response.say(text, voice="Polly.Joanna")
         return response
+    
+    def _parse_appointment_time(self, when: str) -> datetime | None:
+        """Parse natural language time into a datetime.
+        
+        Args:
+            when: Natural language time like "tomorrow at 2pm", "Monday 10am"
+            
+        Returns:
+            Parsed datetime or None if parsing fails.
+        """
+        import re
+        from datetime import timedelta
+        
+        now = datetime.now()
+        when_lower = when.lower().strip()
+        
+        # Try to extract time (e.g., "2pm", "10:30am", "14:00")
+        time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', when_lower)
+        hour = 9  # default to 9am
+        minute = 0
+        
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2) or 0)
+            meridiem = time_match.group(3)
+            
+            if meridiem == 'pm' and hour != 12:
+                hour += 12
+            elif meridiem == 'am' and hour == 12:
+                hour = 0
+        
+        # Parse the date part
+        target_date = now.date()
+        
+        if 'today' in when_lower:
+            target_date = now.date()
+        elif 'tomorrow' in when_lower:
+            target_date = (now + timedelta(days=1)).date()
+        elif 'next week' in when_lower:
+            target_date = (now + timedelta(days=7)).date()
+        else:
+            # Check for day names
+            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            for i, day in enumerate(days):
+                if day in when_lower:
+                    current_day = now.weekday()
+                    days_ahead = i - current_day
+                    if days_ahead <= 0:  # Target day already happened this week
+                        days_ahead += 7
+                    target_date = (now + timedelta(days=days_ahead)).date()
+                    break
+            else:
+                # Try parsing ISO format or common formats
+                date_patterns = [
+                    r'(\d{4})-(\d{2})-(\d{2})',  # 2026-01-15
+                    r'(\d{1,2})/(\d{1,2})/(\d{4})',  # 1/15/2026
+                    r'(\d{1,2})/(\d{1,2})',  # 1/15 (assume current year)
+                ]
+                for pattern in date_patterns:
+                    match = re.search(pattern, when_lower)
+                    if match:
+                        groups = match.groups()
+                        if len(groups) == 3:
+                            if '-' in pattern:
+                                year, month, day = int(groups[0]), int(groups[1]), int(groups[2])
+                            else:
+                                month, day, year = int(groups[0]), int(groups[1]), int(groups[2])
+                        else:
+                            month, day = int(groups[0]), int(groups[1])
+                            year = now.year
+                        try:
+                            from datetime import date
+                            target_date = date(year, month, day)
+                        except ValueError:
+                            pass
+                        break
+        
+        try:
+            return datetime.combine(target_date, datetime.min.time().replace(hour=hour, minute=minute))
+        except (ValueError, TypeError):
+            return None
     
     async def handle_incoming_call(self, request: TwilioRequest) -> TwiMLResponse:
         """Process incoming call webhook and return TwiML to start streaming.
@@ -470,13 +555,10 @@ class WebhookHandler:
             response.hangup()
             return response
         
-        # Get call state for context
-        call_state = await self._call_manager.get_call_state(call_sid)
-        context = call_state.context if call_state else {}
-        
         # Generate response using reasoning engine
+        # (context will be retrieved fresh inside _generate_ai_response)
         response_text = await self._generate_ai_response(
-            speech_result, context, call_sid
+            speech_result, call_sid
         )
         
         # Broadcast assistant response to frontend
@@ -498,14 +580,12 @@ class WebhookHandler:
     async def _generate_ai_response(
         self,
         speech_result: str,
-        context: dict[str, Any],
         call_sid: str,
     ) -> str:
         """Generate an AI response using the reasoning engine.
         
         Args:
             speech_result: The transcribed speech.
-            context: Current conversation context.
             call_sid: The call identifier.
             
         Returns:
@@ -514,17 +594,25 @@ class WebhookHandler:
         if not self._reasoning_engine:
             return "Thank you for calling. How can I assist you today?"
         
+        # Get fresh context from call state (includes history from previous exchanges)
+        call_state = await self._call_manager.get_call_state(call_sid)
+        if not call_state:
+            return "I'm sorry, there was an error. Goodbye."
+        context = call_state.context.copy()  # Work with a copy to avoid mutation issues
+        
         # Extract caller info from transcript
         caller_info = self._reasoning_engine.extract_caller_info(speech_result)
         
         # Update context with caller info
         if caller_info.get("name") or caller_info.get("purpose"):
+            context["caller_name"] = caller_info.get("name")
+            context["call_purpose"] = caller_info.get("purpose")
             await self._call_manager.update_context(call_sid, {
                 "caller_name": caller_info.get("name"),
                 "call_purpose": caller_info.get("purpose"),
             })
         
-        # Decide what tools to use
+        # Decide what tools to use (with current context including history)
         tool_calls = await self._reasoning_engine.decide_action(
             speech_result, context
         )
@@ -564,8 +652,59 @@ class WebhookHandler:
                     await self._call_manager.update_context(
                         call_sid, {"emails": emails}
                     )
+            
+            elif tc.tool == Tool.SCHEDULE_APPOINTMENT and self._calendar_service:
+                what = tc.arguments.get("what", "")
+                who = tc.arguments.get("who", "")
+                when = tc.arguments.get("when", "")
+
+                if not self._calendar_service.is_connected():
+                    context["appointment_scheduled"] = {
+                        "success": False,
+                        "error": "Google Calendar not connected. Please authenticate first."
+                    }
+                elif what and who and when:
+                    # Parse the natural language date
+                    appointment_time = self._parse_appointment_time(when)
+                    if appointment_time:
+                        # Default to 30 minute appointment
+                        from datetime import timedelta
+                        end_time = appointment_time + timedelta(minutes=30)
+
+                        # Create the event with minimal info
+                        summary = f"{what} with {who}"
+                        try:
+                            result = self._calendar_service.create_event(
+                                summary=summary,
+                                start_time=appointment_time,
+                                end_time=end_time,
+                                description=f"Scheduled via phone call with {who}"
+                            )
+
+                            if result:
+                                context["appointment_scheduled"] = {
+                                    "what": what,
+                                    "who": who,
+                                    "when": appointment_time.strftime("%A, %B %d at %I:%M %p"),
+                                    "success": True
+                                }
+                                await self._call_manager.update_context(
+                                    call_sid, {"appointment_scheduled": context["appointment_scheduled"]}
+                                )
+                                logger.info(f"Scheduled appointment: {summary} at {appointment_time}")
+                            else:
+                                context["appointment_scheduled"] = {"success": False, "error": "Failed to create event"}
+                        except ValueError as e:
+                            context["appointment_scheduled"] = {"success": False, "error": str(e)}
+                    else:
+                        context["appointment_scheduled"] = {"success": False, "error": f"Could not understand time: {when}"}
         
-        # Generate response with updated context
+        # Refresh context from call state to get latest updates (including any history)
+        call_state = await self._call_manager.get_call_state(call_sid)
+        if call_state:
+            context = call_state.context.copy()
+        
+        # Generate response with updated context (including history)
         response_text = await self._reasoning_engine.generate_response(
             speech_result, context
         )

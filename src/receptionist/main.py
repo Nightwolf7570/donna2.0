@@ -9,7 +9,9 @@ This module provides:
 
 import base64
 import hashlib
+import json
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -24,7 +26,7 @@ from .call_manager import CallManager
 from .config import Settings, get_settings
 
 from .database import DatabaseManager, get_database
-from .google_auth import authenticate_google, SCOPES
+from .database import DatabaseManager, get_database
 from .calendar_service import CalendarService
 from .models import BusinessConfig, Contact, Email, ValidationError
 from .reasoning_engine import ReasoningEngine
@@ -144,6 +146,35 @@ class EventInput(BaseModel):
     attendees: list[str] = []
 
 
+class GoogleCalendarStatusResponse(BaseModel):
+    """Response model for Google Calendar status."""
+    
+    connected: bool
+    calendar_id: str | None = None
+
+
+class CalendarEventInput(BaseModel):
+    """Input model for creating calendar events."""
+
+    summary: str = Field(..., min_length=1)
+    start_time: datetime
+    end_time: datetime
+    description: str | None = None
+    attendees: list[str] | None = None
+
+
+class CalendarEventResponse(BaseModel):
+    """Response model for calendar events."""
+
+    id: str
+    summary: str
+    start: dict
+    end: dict
+    description: str | None = None
+    htmlLink: str | None = None
+
+
+
 # Global instances
 call_manager: CallManager | None = None
 voice_pipeline: VoicePipeline | None = None
@@ -196,17 +227,38 @@ async def lifespan(app: FastAPI):
         logger.warning(f"VectorSearch initialization failed: {e}")
         vector_search = None
     
+    # Initialize calendar service
+    # Initialize calendar service
+    if db_manager and settings.google_credentials_path and os.path.exists(settings.google_credentials_path):
+        try:
+            with open(settings.google_credentials_path) as f:
+                creds = json.load(f)
+                # Handle both 'installed' and 'web' client types
+                app_creds = creds.get("installed") or creds.get("web")
+                if app_creds:
+                    calendar_service = CalendarService(
+                        client_id=app_creds["client_id"],
+                        client_secret=app_creds["client_secret"],
+                        redirect_uri=f"{settings.base_url}/google/callback",
+                        tokens_collection=db_manager.calendar_tokens
+                    )
+                    logger.info("CalendarService initialized")
+                else:
+                    logger.warning("Invalid credentials.json format: missing 'installed' or 'web'")
+        except Exception as e:
+            logger.error(f"Failed to initialize CalendarService: {e}")
+    else:
+        logger.warning("CalendarService not initialized: Missing credentials.json or DB")
+
     # Initialize webhook handler
     webhook_handler = WebhookHandler(
         call_manager=call_manager,
         voice_pipeline=voice_pipeline,
         reasoning_engine=reasoning_engine,
         vector_search=vector_search,
+        calendar_service=calendar_service,
         base_url=settings.base_url,
     )
-
-    # Initialize calendar service
-    calendar_service = CalendarService()
     
     logger.info("AI Receptionist started")
     yield
@@ -805,6 +857,216 @@ def get_dashboard_stats():
 
 
 # =============================================================================
+# Google Calendar Endpoints
+# =============================================================================
+
+@app.get("/google/auth-url")
+async def get_google_auth_url():
+    """Get Google OAuth2 authorization URL."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Google Calendar not configured")
+
+    try:
+        from google_auth_oauthlib.flow import Flow
+        
+        # Use a generic redirect URI for development - strictly for local testing
+        # In production, this must match the Google Cloud Console settings
+        redirect_uri = "http://localhost:8000/google/callback"
+        
+        # Determine strict client secrets path
+        import os
+        client_secrets_file = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
+        
+        if not os.path.exists(client_secrets_file):
+             # Fail gracefully if file missing
+             raise FileNotFoundError(f"credentials.json not found at {client_secrets_file}")
+
+        flow = Flow.from_client_secrets_file(
+            client_secrets_file,
+            scopes=[
+                "https://www.googleapis.com/auth/calendar",
+                "https://www.googleapis.com/auth/calendar.events"
+            ],
+            redirect_uri=redirect_uri
+        )
+        
+        auth_url, _ = flow.authorization_url(prompt="consent")
+        return {"auth_url": auth_url}
+        
+    except Exception as e:
+        logger.error(f"Failed to generate auth URL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/google/callback")
+async def google_auth_callback(code: str, state: str | None = None):
+    """Handle Google OAuth2 callback."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Google Calendar not configured")
+
+    try:
+        from google_auth_oauthlib.flow import Flow
+        
+        redirect_uri = "http://localhost:8000/google/callback"
+        client_secrets_file = "credentials.json"  # Assume default or env var
+        
+        flow = Flow.from_client_secrets_file(
+            client_secrets_file,
+            scopes=[
+                "https://www.googleapis.com/auth/calendar",
+                "https://www.googleapis.com/auth/calendar.events"
+            ],
+            redirect_uri=redirect_uri
+        )
+        
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
+        
+        # Store in database via service
+        from .models import GoogleCalendarToken
+        
+        # Calculate expiry
+        # credentials.expiry is a datetime
+        # We need to make sure we store it correctly
+        expires_at = credentials.expiry
+        if not expires_at:
+             from datetime import timedelta
+             expires_at = datetime.now() + timedelta(hours=1)
+
+        token = GoogleCalendarToken(
+            user_id="default",
+            access_token=credentials.token,
+            refresh_token=credentials.refresh_token or "",
+            expires_at=expires_at,
+            calendar_id="primary"
+        )
+        
+        if db_manager:
+            db_manager.calendar_tokens.update_one(
+                {"_id": "default"},
+                {"$set": token.to_dict()},
+                upsert=True
+            )
+            
+        return {
+            "status": "connected",
+            "message": "Google Calendar connected successfully. You can close this window."
+        }
+    except Exception as e:
+        logger.error(f"OAuth callback failed: {e}")
+        raise HTTPException(status_code=400, detail=f"OAuth failed: {str(e)}")
+
+
+@app.get("/google/status", response_model=GoogleCalendarStatusResponse)
+async def get_google_status():
+    """Check if Google Calendar is connected."""
+    if not calendar_service or not db_manager:
+        return GoogleCalendarStatusResponse(connected=False, calendar_id=None)
+
+    # Check database for token
+    token_doc = db_manager.calendar_tokens.find_one({"_id": "default"})
+    connected = token_doc is not None
+    calendar_id = token_doc.get("calendar_id", "primary") if token_doc else None
+
+    return GoogleCalendarStatusResponse(connected=connected, calendar_id=calendar_id)
+
+
+@app.delete("/google/disconnect")
+async def disconnect_google():
+    """Disconnect Google Calendar by removing stored tokens."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Google Calendar not configured")
+
+    calendar_service.disconnect()
+    return {"status": "disconnected", "message": "Google Calendar disconnected"}
+
+
+@app.get("/calendar/events", response_model=list[CalendarEventResponse])
+async def list_calendar_events(days: int = Query(default=7, ge=1, le=30)):
+    """List upcoming calendar events."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Google Calendar not configured")
+
+    if not calendar_service.is_connected():
+        raise HTTPException(status_code=400, detail="Google Calendar not connected")
+
+    try:
+        from datetime import timedelta, timezone
+
+        time_min = datetime.now(timezone.utc)
+        time_max = time_min + timedelta(days=days)
+        events = calendar_service.list_events(time_min=time_min, time_max=time_max)
+
+        return [
+            CalendarEventResponse(
+                id=e.get("id", ""),
+                summary=e.get("summary", ""),
+                start=e.get("start", {}),
+                end=e.get("end", {}),
+                description=e.get("description"),
+                htmlLink=e.get("htmlLink"),
+            )
+            for e in events
+        ]
+    except Exception as e:
+        logger.error(f"Failed to list calendar events: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/calendar/events", response_model=CalendarEventResponse, status_code=201)
+async def create_calendar_event(event_input: CalendarEventInput):
+    """Create a new calendar event."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Google Calendar not configured")
+
+    if not calendar_service.is_connected():
+        raise HTTPException(status_code=400, detail="Google Calendar not connected")
+
+    try:
+        event = calendar_service.create_event(
+            summary=event_input.summary,
+            start_time=event_input.start_time,
+            end_time=event_input.end_time,
+            description=event_input.description,
+            attendees=event_input.attendees,
+        )
+
+        return CalendarEventResponse(
+            id=event.get("id", ""),
+            summary=event.get("summary", ""),
+            start=event.get("start", {}),
+            end=event.get("end", {}),
+            description=event_input.description,
+            htmlLink=event.get("htmlLink"),
+        )
+    except Exception as e:
+        logger.error(f"Failed to create calendar event: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/calendar/events/{event_id}", status_code=204)
+async def delete_calendar_event(event_id: str):
+    """Delete a calendar event."""
+    if not calendar_service:
+        raise HTTPException(status_code=503, detail="Google Calendar not configured")
+
+    if not calendar_service.is_connected():
+        raise HTTPException(status_code=400, detail="Google Calendar not connected")
+
+    try:
+        success = calendar_service.delete_event(event_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Event not found")
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete calendar event: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# =============================================================================
 # Google Calendar & Auth Endpoints
 # =============================================================================
 
@@ -831,55 +1093,7 @@ async def get_google_status():
     return {"authenticated": token_exists}
 
 
-@app.post("/calendar/sync")
-def sync_calendar():
-    """Sync calendar events to MongoDB."""
-    if not calendar_service:
-        raise HTTPException(status_code=503, detail="Calendar service not available")
-    
-    try:
-        count = calendar_service.sync_events_to_db()
-        return {"synced_events": count}
-    except Exception as e:
-        logger.error(f"Sync failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.get("/calendar/events")
-def list_calendar_events(
-    start: datetime | None = None,
-    days: int = 7
-):
-    """List upcoming calendar events."""
-    if not calendar_service:
-        raise HTTPException(status_code=503, detail="Calendar service not available")
-    
-    from datetime import timedelta
-    if not start:
-        start = datetime.utcnow()
-    end = start + timedelta(days=days)
-    
-    return calendar_service.list_events(start_time=start, end_time=end)
-
-
-@app.post("/calendar/events")
-def create_calendar_event(event: EventInput):
-    """Create a new calendar event."""
-    if not calendar_service:
-        raise HTTPException(status_code=503, detail="Calendar service not available")
-    
-    result = calendar_service.create_event(
-        summary=event.summary,
-        start_time=event.start_time,
-        end_time=event.end_time,
-        attendees=event.attendees,
-        description=event.description
-    )
-    
-    if not result:
-        raise HTTPException(status_code=500, detail="Failed to create event")
-        
-    return result
 
 
 # =============================================================================

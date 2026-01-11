@@ -7,23 +7,7 @@ import type {
   SystemConfig,
 } from '../types'
 
-interface CalendarEvent {
-  id: string
-  summary: string
-  description?: string
-  start: { dateTime: string; timeZone: string } | { date: string }
-  end: { dateTime: string; timeZone: string } | { date: string }
-  status: string
-  htmlLink?: string
-}
 
-interface EventInput {
-  summary: string
-  description?: string
-  start_time: string
-  end_time: string
-  attendees?: string[]
-}
 
 interface ApiClientConfig {
   baseUrl: string
@@ -249,33 +233,57 @@ export class ApiClient {
   }
 
   // Google Calendar endpoints
-  async initiateGoogleAuth(): Promise<{ status: string; valid: boolean }> {
-    return this.request<{ status: string; valid: boolean }>('/google/auth', {
-      method: 'POST',
-    })
+  async getGoogleAuthUrl(): Promise<{ auth_url: string }> {
+    return this.request('/google/auth-url')
   }
 
-  async getGoogleAuthStatus(): Promise<{ authenticated: boolean }> {
-    return this.request<{ authenticated: boolean }>('/google/status')
+  async getGoogleCalendarStatus(): Promise<{
+    connected: boolean
+    calendar_id: string | null
+  }> {
+    return this.request('/google/status')
   }
 
-  async syncCalendar(): Promise<{ synced_events: number }> {
-    return this.request<{ synced_events: number }>('/calendar/sync', {
-      method: 'POST',
-    })
+  async disconnectGoogleCalendar(): Promise<{ status: string; message: string }> {
+    return this.request('/google/disconnect', { method: 'DELETE' })
   }
 
-  async getCalendarEvents(start?: string, days: number = 7): Promise<CalendarEvent[]> {
-    const params = new URLSearchParams()
-    if (start) params.append('start', start)
-    params.append('days', days.toString())
-    return this.request<CalendarEvent[]>(`/calendar/events?${params.toString()}`)
+  async getCalendarEvents(days?: number): Promise<
+    Array<{
+      id: string
+      summary: string
+      start: { dateTime?: string; date?: string }
+      end: { dateTime?: string; date?: string }
+      description?: string
+      htmlLink?: string
+    }>
+  > {
+    const query = days ? `?days=${days}` : ''
+    return this.request(`/calendar/events${query}`)
   }
 
-  async createCalendarEvent(event: EventInput): Promise<CalendarEvent> {
-    return this.request<CalendarEvent>('/calendar/events', {
+  async createCalendarEvent(event: {
+    summary: string
+    start_time: string
+    end_time: string
+    description?: string
+    attendees?: string[]
+  }): Promise<{
+    id: string
+    summary: string
+    start: Record<string, unknown>
+    end: Record<string, unknown>
+    htmlLink?: string
+  }> {
+    return this.request('/calendar/events', {
       method: 'POST',
       body: event,
+    })
+  }
+
+  async deleteCalendarEvent(eventId: string): Promise<void> {
+    await this.request(`/calendar/events/${encodeURIComponent(eventId)}`, {
+      method: 'DELETE',
     })
   }
 }

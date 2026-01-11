@@ -20,6 +20,7 @@ class Tool(Enum):
     SEARCH_EMAILS = "search_emails"
     SEARCH_CONTACTS = "search_contacts"
     GENERATE_RESPONSE = "generate_response"
+    SCHEDULE_APPOINTMENT = "schedule_appointment"
 
 
 @dataclass
@@ -95,21 +96,64 @@ class ReasoningEngine:
                     "required": ["name"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "schedule_appointment",
+                "description": "Schedule an appointment on the calendar. Only needs: what it's about, caller's name, and when.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "what": {
+                            "type": "string",
+                            "description": "What the appointment is about (brief description)"
+                        },
+                        "who": {
+                            "type": "string",
+                            "description": "Name of the person requesting the appointment"
+                        },
+                        "when": {
+                            "type": "string",
+                            "description": "When the appointment should be scheduled (e.g., 'tomorrow at 2pm', 'Monday 10am', '2026-01-15 14:00')"
+                        }
+                    },
+                    "required": ["what", "who", "when"]
+                }
+            }
         }
     ]
 
     BASE_SYSTEM_PROMPT = """You are Donna, an AI receptionist assistant. Your name is Donna. Your job is to:
 1. Identify who is calling and why
 2. Search for relevant context about the caller
-3. Provide helpful, professional responses
-
+3. Schedule appointments when requested
+4. Provide helpful, professional responses
 
 When a caller introduces themselves or states their purpose:
 - Use search_contacts to look up the caller if they give their name
 - Use search_emails to find relevant context about their topic
 
+SCHEDULING APPOINTMENTS:
+When someone wants to schedule a meeting/appointment, use the schedule_appointment tool.
+You only need THREE things:
+1. WHAT: What is the appointment about?
+2. WHO: The caller's name (first name is enough)
+3. WHEN: When they want to meet
 
-Always introduce yourself as Donna when appropriate. Be professional, warm, concise, and helpful."""
+Do NOT ask for email, phone number, or other details - just what, who, and when.
+If they give you these three pieces of info, schedule it immediately.
+If any are missing, ask ONLY for the missing piece.
+
+Always introduce yourself as Donna when appropriate. Be professional, warm, concise, and helpful.
+
+CRITICAL OUTPUT RULES:
+- Output ONLY what you would SAY OUT LOUD to the caller
+- DO NOT include any internal thoughts, reasoning, or monologue
+- DO NOT describe your actions or tools (e.g., "I'll search for...", "Let me look up...")
+- DO NOT use tags like <think>, <reasoning>, [thinking], etc.
+- DO NOT narrate what you're doing - just speak naturally
+- Your response will be converted directly to speech - output only spoken words"""
 
 
 
@@ -148,6 +192,59 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
             prompt += business_info
         
         return prompt
+
+    def _filter_reasoning(self, content: str) -> str:
+        """Filter out all reasoning, internal monologue, and non-spoken content.
+        
+        Args:
+            content: Raw model output.
+            
+        Returns:
+            Cleaned content with only spoken words.
+        """
+        if not content:
+            return content
+        
+        # Remove XML-style tags (think, reasoning, internal, thought, etc.)
+        content = re.sub(r"<(?:think|thinking|thought|reasoning|internal|reflect|analysis|plan|action|tool|command)[^>]*>.*?</(?:think|thinking|thought|reasoning|internal|reflect|analysis|plan|action|tool|command)>", "", content, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Remove self-closing tags
+        content = re.sub(r"<[^>]+/>", "", content, flags=re.IGNORECASE)
+        
+        # Remove bracketed thoughts [thinking...], [internal...], etc.
+        content = re.sub(r"\[(?:thinking|thought|internal|reasoning|action|tool|note|aside)[^\]]*\]", "", content, flags=re.IGNORECASE)
+        
+        # Remove asterisk actions *thinking*, *searches*, *looking up*, etc.
+        content = re.sub(r"\*[^*]+\*", "", content)
+        
+        # Remove parenthetical asides (internal thought), (reasoning), etc.
+        content = re.sub(r"\((?:thinking|internal|reasoning|searching|looking|checking|tool|action)[^)]*\)", "", content, flags=re.IGNORECASE)
+        
+        # Remove lines starting with action descriptors
+        action_patterns = [
+            r"^(?:I (?:will|am going to|need to|should|'ll|am|'m))\s+(?:search|look|check|find|use|call|invoke|query|access)[^\n]*\n?",
+            r"^(?:Let me|I'll|I will|I need to|I should|I'm going to)\s+[^\n]*\n?",
+            r"^(?:Searching|Looking|Checking|Finding|Using|Calling|Invoking)[^\n]*\n?",
+            r"^(?:Tool|Action|Function|Command):[^\n]*\n?",
+        ]
+        for pattern in action_patterns:
+            content = re.sub(pattern, "", content, flags=re.MULTILINE | re.IGNORECASE)
+        
+        # Remove markdown code blocks (tool calls, JSON, etc.)
+        content = re.sub(r"```[^`]*```", "", content, flags=re.DOTALL)
+        
+        # Remove inline code
+        content = re.sub(r"`[^`]+`", "", content)
+        
+        # Remove JSON-like structures
+        content = re.sub(r"\{[^}]*\}", "", content)
+        
+        # Clean up whitespace
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        content = re.sub(r"  +", " ", content)
+        content = content.strip()
+        
+        return content
 
     async def decide_action(
         self, transcript: str, context: dict[str, Any]
@@ -215,6 +312,8 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
                         tool_calls.append(ToolCall(Tool.SEARCH_EMAILS, args))
                     elif tool_name == "search_contacts":
                         tool_calls.append(ToolCall(Tool.SEARCH_CONTACTS, args))
+                    elif tool_name == "schedule_appointment":
+                        tool_calls.append(ToolCall(Tool.SCHEDULE_APPOINTMENT, args))
             
             return tool_calls
             
@@ -250,6 +349,14 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
                 for e in context["emails"][:3]
             ])
             system_content += f"\n\nRelevant emails:\n{emails_info}"
+        
+        # Add appointment scheduling result
+        if context.get("appointment_scheduled"):
+            appt = context["appointment_scheduled"]
+            if appt.get("success"):
+                system_content += f"\n\nAPPOINTMENT SCHEDULED: {appt.get('what')} with {appt.get('who')} on {appt.get('when')}. Confirm this to the caller."
+            else:
+                system_content += f"\n\nAPPOINTMENT FAILED: {appt.get('error')}. Apologize and offer to try again."
 
         messages = [
             {"role": "system", "content": system_content},
@@ -286,7 +393,12 @@ Always introduce yourself as Donna when appropriate. Be professional, warm, conc
             response.raise_for_status()
             data = response.json()
             
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            
+            # Remove all reasoning/internal monologue patterns
+            content = self._filter_reasoning(content)
+            
+            return content
             
         except Exception as e:
             logger.error(f"Failed to generate response: {e}")

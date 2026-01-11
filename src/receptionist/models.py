@@ -133,6 +133,61 @@ class Contact:
 
 
 @dataclass
+class GoogleCalendarToken:
+    """OAuth tokens for Google Calendar integration.
+
+    Attributes:
+        user_id: User identifier (default for single-user setup)
+        access_token: OAuth access token
+        refresh_token: OAuth refresh token for renewal
+        expires_at: Token expiration timestamp
+        calendar_id: Google Calendar ID to use
+    """
+
+    user_id: str
+    access_token: str
+    refresh_token: str
+    expires_at: datetime
+    calendar_id: str = "primary"
+
+    def __post_init__(self) -> None:
+        """Validate required fields after initialization."""
+        self._validate()
+
+    def _validate(self) -> None:
+        """Validate all required fields."""
+        if not self.user_id or not self.user_id.strip():
+            raise ValidationError("user_id is required and cannot be empty")
+        if not self.access_token or not self.access_token.strip():
+            raise ValidationError("access_token is required and cannot be empty")
+        if not self.refresh_token or not self.refresh_token.strip():
+            raise ValidationError("refresh_token is required and cannot be empty")
+        if self.expires_at is None:
+            raise ValidationError("expires_at is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for MongoDB storage."""
+        return {
+            "_id": self.user_id,
+            "access_token": self.access_token,
+            "refresh_token": self.refresh_token,
+            "expires_at": self.expires_at,
+            "calendar_id": self.calendar_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GoogleCalendarToken":
+        """Create GoogleCalendarToken from MongoDB document."""
+        return cls(
+            user_id=str(data.get("_id", data.get("user_id", ""))),
+            access_token=data.get("access_token", ""),
+            refresh_token=data.get("refresh_token", ""),
+            expires_at=data.get("expires_at", datetime.now()),
+            calendar_id=data.get("calendar_id", "primary"),
+        )
+
+
+@dataclass
 class BusinessConfig:
     """Business configuration for the AI receptionist.
     
