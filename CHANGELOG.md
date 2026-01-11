@@ -26,6 +26,7 @@
 
 ### Fixed
 - ElevenLabs TTS integration
+- AI voice no longer speaks internal reasoning, tool calls, or monologue during calls
 
 ### Infrastructure
 - FastAPI backend with Twilio webhooks
